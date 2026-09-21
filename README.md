@@ -46,7 +46,7 @@ Any platform ─── enigo ─── pointer and keyboard
 
 On Windows the control tree carries both the text and the rectangle, so recognition never runs.
 
-On Linux it carries only the text: Wayland never tells a window where it sits, so a GTK4 window reports its contents from `0,0` wherever it really is. screenpeek reads the pixels as well, matches a couple of labels between the two, and that gives the window's offset. Every control in that window then gets a real position — including ones recognition cannot read at all, such as an icon whose only text is its accessible name — and the text is whatever the toolkit says it is, in any language. Windows with no accessible tree fall back to recognition alone.
+On Linux it carries only the text: Wayland never tells a window where it sits, so a GTK4 window reports its contents from `0,0` wherever it really is. screenpeek reads the pixels as well, matches a couple of labels between the two, and that gives the window's offset. Every control in that window then gets a real position, including ones recognition cannot read at all, such as an icon whose only text is its accessible name, and the text is whatever the toolkit says it is, in any language. Windows with no accessible tree fall back to recognition alone.
 
 A running daemon keeps the models loaded, keeps the last frame, and re-reads only the rows that changed.
 
@@ -65,13 +65,13 @@ screenpeek tree
 screenpeek read   <image> [--scale N] [--json]
 ```
 
-`scan` prints `id text @x,y`, where `x,y` is the centre of the text on the virtual desktop — the point a click lands on. `--json` adds each element's size.
+`scan` prints `id text @x,y`, where `x,y` is the centre of the text on the virtual desktop, the point a click lands on. `--json` adds each element's size.
 
 `click` takes an id from the last scan or part of an element's text. Exact matches beat prefixes, prefixes beat substrings, so `click Save` picks `Save` over `Save As...`. Several matches is an error that lists them; nothing is clicked on a guess.
 
 A scan is cached, and `click` scans again by itself when the cached one cannot answer, so acting on a screen is usually one command. `--fresh` forces a new scan when the text is unchanged but has moved.
 
-`serve` keeps a daemon in the background; every other command uses it automatically when it is running and works without it when it is not. `status` says whether one is up.
+`serve` runs the daemon in the foreground. It is rarely needed by hand: the first command that would benefit starts one in the background by itself, and every command after that uses it. `status` says whether one is up, and `SCREENPEEK_NO_DAEMON=1` keeps everything in a single process.
 
 `run` takes a whole interaction in one command and scans only when a step needs something it does not already know:
 

@@ -4,6 +4,9 @@ Measured on the machine described in [BENCHMARK.md](BENCHMARK.md). This is the
 working record of where the time goes, what has been tried, and what is worth
 trying next.
 
+The daemon starts itself the first time a command needs it, so the fast path is
+the default. `SCREENPEEK_NO_DAEMON=1` keeps everything in one process.
+
 ## Where a scan spends its time
 
 | Stage | Cost |
@@ -28,7 +31,7 @@ OCR. Recall fell from 95% to 90% at 2x and 80% at 3x, and it cost 40% more
 time. ocrs normalizes line height itself; upscaling only adds interpolation
 artefacts.
 
-**`-C target-cpu=native`.** 392 ms against 336 ms on the same fixture — 17%
+**`-C target-cpu=native`.** 392 ms against 336 ms on the same fixture, 17%
 slower. rten dispatches SIMD at runtime and pinning the target defeats it.
 Build it stock.
 
@@ -48,7 +51,7 @@ from excluding text-dense background windows, which is exactly what this does.
 
 **Recognize bands in parallel.** Patched reads already split the screen into
 independent bands. rten threads within one recognition pass, so the gain is
-whatever is left idle between passes — worth measuring before building.
+whatever is left idle between passes, which is worth measuring before building.
 
 **Cache recognition per line.** Hash each detected line's pixels and keep the
 text. A window that scrolls by one line currently re-reads every line in the

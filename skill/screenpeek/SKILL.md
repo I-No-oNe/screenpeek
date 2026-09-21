@@ -43,10 +43,10 @@ run a scan before every click out of habit.
 3. **Prefer text over ids.** `click "Save"` survives a changed screen; `click 7`
    is only valid for the scan that produced it. Use ids to disambiguate.
 4. **Let it rescan.** After an action changes the screen, just issue the next
-   `click` with text — it refreshes when it has to. Use `--fresh` when the
+   `click` with text, which refreshes when it has to. Use `--fresh` when the
    element's text is unchanged but its position moved.
 5. **Check the result.** Every acting command prints the element it used. If
-   nothing matched, screenpeek exits non-zero and clicks nothing — never
+   nothing matched, screenpeek exits non-zero and clicks nothing, so never
    fall back to guessing pixel coordinates.
 6. **Ambiguity is a stop, not a guess.** When several elements match,
    screenpeek lists them; pick one by id rather than rephrasing blindly.
@@ -78,5 +78,5 @@ screenpeek type  <text>
 screenpeek fill  <id|text> <text>
 ```
 
-`x,y` is the centre of the text on the virtual desktop — the point a click
+`x,y` is the centre of the text on the virtual desktop, the point a click
 lands on. `--json` adds each element's width and height.

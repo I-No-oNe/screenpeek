@@ -2,7 +2,7 @@
 //!
 //! The tree knows what every control says; the pixels know where things are.
 //! Matching a few labels between them gives the offset of a window on screen,
-//! and with that offset every control in that window gets a real position —
+//! and with that offset every control in that window gets a real position,
 //! including the ones recognition never reads, such as an icon whose only text
 //! is its accessible name.
 

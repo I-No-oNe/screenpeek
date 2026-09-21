@@ -2,8 +2,8 @@
 //!
 //! Toolkits publish their controls on the AT-SPI bus with exact text, in
 //! whatever language the interface is in. Under Wayland the coordinates that
-//! come with them are useless — a client is not told where it sits, so a GTK4
-//! window reports `0 0 749 840` wherever it actually is — so only the text and
+//! come with them are useless, since a client is not told where it sits, so a GTK4
+//! window reports `0 0 749 840` wherever it actually is. Only the text and
 //! the shape of each window are taken from here. Positions come from the
 //! pixels, and `fuse` puts the two together.
 

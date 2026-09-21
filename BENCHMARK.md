@@ -39,7 +39,7 @@ Two things carry the speed:
 
 The benchmark's own screen is a scrolling terminal with an animated spinner, which is the worst case for this: most of its requests repaint most of the screen and show as `full`. A settled application window patches.
 
-**Honest comparison.** Taking a screenshot is fast locally — it is a copy. screenpeek is slower to produce its answer but produces a third of the tokens and a coordinate that is already correct. The screenshot pays afterwards, in inference over ~1,800 image tokens and in the round trip needed to turn "the button is around there" into a click.
+**Honest comparison.** Taking a screenshot is fast locally, since it is a copy. screenpeek is slower to produce its answer but produces a third of the tokens and a coordinate that is already correct. The screenshot pays afterwards, in inference over ~1,800 image tokens and in the round trip needed to turn "the button is around there" into a click.
 
 ## Reading a known interface
 
@@ -73,7 +73,7 @@ $ busctl --address unix:path=/run/user/1000/at-spi/bus_0 \
 a(so) 5 ":1.1" ... ":1.9" ...
 ```
 
-The five registered applications are `xdg-desktop-portal-gtk`, `kdeconnectd`, `udiskie`, `quickshell` and `qs` — background services. The only one with windows reported `a(so) 0`: no children, nothing to read. No terminal, editor or browser on the machine registers at all.
+The five registered applications are `xdg-desktop-portal-gtk`, `kdeconnectd`, `udiskie`, `quickshell` and `qs`, all background services. The only one with windows reported `a(so) 0`: no children, nothing to read. No terminal, editor or browser on the machine registers at all.
 
 Beyond an empty tree, Wayland has a structural problem for this use: a client is never told where it sits on screen, so the extents AT-SPI reports are window-relative or zero, and there is nothing to move the pointer to. A screenshot is the one thing that is true on every Linux desktop, so that is what gets read.
 
