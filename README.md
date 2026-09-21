@@ -95,6 +95,8 @@ Measured on 1920x1080, Hyprland, CPU only. Full method and numbers in [BENCHMARK
 | One look, no daemon | 2,617 ms | 529 ms |
 | One look, daemon, changed rows only | ~400 ms | 529 ms |
 
+Where the time goes, what has been tried and what is worth trying next is in [PERFORMANCE.md](PERFORMANCE.md).
+
 A look costs about a third of the tokens of a screenshot and needs no round trip to place a click. The daemon's persistent capture buffer took capture from 354 ms to 9 ms; incremental reads take a repeat look from 2.6 s to about 0.4 s when only part of the screen changed.
 
 ## Use it from an agent
