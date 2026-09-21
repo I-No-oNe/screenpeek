@@ -1,0 +1,48 @@
+[package]
+name = "screenpeek"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Read the screen as a numbered list of text elements, then click them by name"
+repository = "https://github.com/I-No-oNe/screenpeek"
+license = "MIT"
+keywords = ["ocr", "automation", "screen", "accessibility", "cli"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+enigo = "0.6"
+image = { version = "0.25", default-features = false, features = ["png"] }
+ocrs = "0.13"
+rten = "0.26"
+rten-imageproc = "0.26"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "3"
+xcap = { version = "0.9", features = ["image"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+enigo = { version = "0.6", features = ["wayland"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[target.'cfg(windows)'.dependencies.uiautomation]
+version = "0.25"
+
+[target.'cfg(target_os = "linux")'.dependencies.memmap2]
+version = "0.9"
+
+[target.'cfg(target_os = "linux")'.dependencies.tempfile]
+version = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies.wayland-client]
+version = "0.31"
+
+[target.'cfg(target_os = "linux")'.dependencies.wayland-protocols-wlr]
+version = "0.3"
+features = ["client"]
