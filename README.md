@@ -24,7 +24,7 @@ Prebuilt Linux and Windows binaries are attached to every tagged release on the 
 
 One binary, no runtime dependencies. The OCR models (12 MB) download to the cache directory on first use.
 
-Linux builds need `libwayland-dev` (or your distribution's equivalent) at compile time.
+Linux builds need `libwayland-dev` and `libxkbcommon-dev` (or your distribution's equivalents) at compile time.
 
 Linux talks to wlroots compositors directly: `wlr-screencopy` for capture, `wlr-virtual-pointer` and `virtual-keyboard` for input. Hyprland, Sway, river and Wayfire have all three. GNOME, KDE and X11 are not supported on Linux; Windows is.
 
