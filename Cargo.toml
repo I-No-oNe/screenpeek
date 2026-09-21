@@ -31,6 +31,7 @@ memmap2 = "0.9"
 tempfile = "3"
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 
 [target.'cfg(windows)'.dependencies]
 uiautomation = "0.25"
