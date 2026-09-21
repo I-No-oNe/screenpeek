@@ -8,7 +8,7 @@ bench/bench.sh      # cost and latency of one look
 bench/accuracy.sh   # how much of a known interface is read back correctly
 ```
 
-Machine: Arch Linux 7.2.5, Hyprland on Wayland, 1920x1080, 8 cores, no GPU acceleration. Measured 2026-09-22 with screenpeek 0.1.0. Timings are medians of 3 runs.
+Machine: Arch Linux 7.2.5, Hyprland on Wayland, 1920x1080, 8 cores, no GPU acceleration. Measured 2026-09-22 with screenpeek 0.0.1. Timings are medians of 3 runs.
 
 ## One look at the screen
 
