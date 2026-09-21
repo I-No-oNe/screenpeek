@@ -14,13 +14,17 @@ $ screenpeek fill "Search" "hello world"
 
 ## Install and download
 
-Requires Rust 1.75 or newer.
+```bash
+curl -fsSL https://raw.githubusercontent.com/I-No-oNe/screenpeek/main/install.sh | sh
+```
+
+That drops the latest release binary into `~/.local/bin`. Prebuilt Linux and Windows binaries are also attached to every tagged release on the [Releases page](https://github.com/I-No-oNe/screenpeek/releases).
+
+To build it instead, with Rust 1.75 or newer:
 
 ```bash
 cargo install --git https://github.com/I-No-oNe/screenpeek
 ```
-
-Prebuilt Linux and Windows binaries are attached to every tagged release on the [Releases page](https://github.com/I-No-oNe/screenpeek/releases).
 
 One binary, no runtime dependencies. The OCR models (12 MB) download to the cache directory on first use.
 
@@ -31,16 +35,20 @@ Linux talks to wlroots compositors directly: `wlr-screencopy` for capture, `wlr-
 ## Runtime design
 
 ```text
-Windows ─── UI Automation ─── names and rectangles, no recognition
+Windows ─── UI Automation ─── exact text + screen rectangles ─── elements
 
-Linux ───── wlr-screencopy ─── one persistent buffer ─── OCR ─── elements
-                                     │
-                              changed bands only
+Linux ───┬─ AT-SPI ────────── exact text, no usable position ──┐
+         │                                                     ├─ fused
+         └─ wlr-screencopy ── OCR ── text with positions ──────┘
 
 Any platform ─── enigo ─── pointer and keyboard
 ```
 
-On Windows the control tree already holds every name and rectangle, so that is used first and recognition never runs. Everywhere else the screen is captured and read. A running daemon keeps the models loaded, keeps the last frame, and re-reads only the rows that changed.
+On Windows the control tree carries both the text and the rectangle, so recognition never runs.
+
+On Linux it carries only the text: Wayland never tells a window where it sits, so a GTK4 window reports its contents from `0,0` wherever it really is. screenpeek reads the pixels as well, matches a couple of labels between the two, and that gives the window's offset. Every control in that window then gets a real position — including ones recognition cannot read at all, such as an icon whose only text is its accessible name — and the text is whatever the toolkit says it is, in any language. Windows with no accessible tree fall back to recognition alone.
+
+A running daemon keeps the models loaded, keeps the last frame, and re-reads only the rows that changed.
 
 ## Commands
 
@@ -48,9 +56,12 @@ On Windows the control tree already holds every name and rectangle, so that is u
 screenpeek scan   [--grep TEXT] [--region X,Y,W,H] [--monitor N] [--json]
 screenpeek click  <id|text> [--button left|right|middle] [--double] [--fresh]
 screenpeek type   <text>
+screenpeek key    <combination>
 screenpeek fill   <id|text> <text>
+screenpeek run    <step>...
 screenpeek serve
 screenpeek status
+screenpeek tree
 screenpeek read   <image> [--scale N] [--json]
 ```
 
@@ -62,7 +73,15 @@ A scan is cached, and `click` scans again by itself when the cached one cannot a
 
 `serve` keeps a daemon in the background; every other command uses it automatically when it is running and works without it when it is not. `status` says whether one is up.
 
-`read` runs recognition over an image file instead of the screen.
+`run` takes a whole interaction in one command and scans only when a step needs something it does not already know:
+
+```bash
+screenpeek run "click File" "click Save As" "type report.pdf" "key enter"
+```
+
+Its steps are `click <target>`, `fill <target> with <text>`, `type <text>`, `key <combination>` and `wait <target>`. Keys are named plainly: `enter`, `tab`, `esc`, `ctrl+s`, `alt+f4`.
+
+`tree` prints what the accessibility tree reports, window by window, which is the quickest way to see whether an application exposes one. `read` runs recognition over an image file instead of the screen.
 
 ## Speed
 
@@ -89,7 +108,7 @@ cp -r skill/screenpeek ~/.claude/skills/
 ## Limits
 
 - Text only, where there is no control tree. An unlabelled icon is invisible to recognition.
-- The recognition model is trained on English.
+- Languages other than English work through the accessibility tree; where a window exposes none, recognition is English.
 - Linux accessibility (AT-SPI) is not used: under Wayland a client is not told where it sits on screen, so the extents it reports cannot be clicked. [BENCHMARK.md](BENCHMARK.md) has the measurement.
 - The cache holds one scan per user.
 
