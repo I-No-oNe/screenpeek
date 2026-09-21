@@ -33,7 +33,7 @@ patched: 47 elements, capture  9ms, read  427ms
 
 Two things carry the speed:
 
-**Persistent capture.** A one-shot screenshot opens a capture session, allocates a buffer and tears it down: 354 ms per frame through the portable path, and 529 ms through `grim`. The daemon holds one Wayland connection and one shared-memory buffer and asks the compositor to copy into it, which lands at **9–26 ms**.
+**Persistent capture.** A one-shot screenshot opens a capture session, allocates a buffer and tears it all down: 354 ms per frame through a general-purpose capture crate, 529 ms through `grim`. The daemon holds one Wayland connection and one shared-memory buffer and asks the compositor to copy into it, which lands at **9–26 ms**.
 
 **Reading only what changed.** The daemon keeps the last frame, compares rows, groups the differing ones into bands and re-reads only those, keeping the text outside them. A repeat look drops from ~2.6 s to **~400 ms**. Once more than 55% of the rows have changed it reads the whole screen instead, because stitching then costs more than it saves.
 
