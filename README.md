@@ -99,10 +99,10 @@ A look costs about a third of the tokens of a screenshot and needs no round trip
 
 ## Use it from an agent
 
-`skill/screenpeek/` is an agent skill: it tells an agent to scan instead of taking a screenshot, and to click by name instead of by coordinate. Copy it into your agent's skills directory.
+`skill/` holds two agent skills: `screenpeek` tells an agent to scan instead of taking a screenshot, and `screenpeek-drive` tells it how to carry out a whole interaction in one command. Copy them into your agent's skills directory.
 
 ```bash
-cp -r skill/screenpeek ~/.claude/skills/
+cp -r skill/screenpeek skill/screenpeek-drive ~/.claude/skills/
 ```
 
 ## Limits

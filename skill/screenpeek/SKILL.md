@@ -25,6 +25,9 @@ screenpeek fill "Search" "cats"  # click a field, then type into it
 screenpeek type "hello"          # type into whatever has focus
 ```
 
+For a sequence of actions rather than a single look, use the `screenpeek-drive`
+skill: `screenpeek run` does a whole interaction against one scan.
+
 `click` reuses the last scan and rescans by itself when the text is not in it,
 so a single `screenpeek click "Save"` is usually the whole interaction. Do not
 run a scan before every click out of habit.
@@ -62,7 +65,9 @@ until screenpeek scan --grep "Done" | grep -q .; do sleep 1; done
 
 - Unlabelled icons, images, colours, visual layout: take a screenshot.
 - Text inside a browser page you control: the DOM is exact, use it.
-- Non-English interfaces: the bundled recognition model is English.
+- Non-English interfaces: text comes from the accessibility tree where a window
+  exposes one, in any language. Where none is exposed, recognition is English
+  only, so take a screenshot instead.
 
 ## Reference
 
