@@ -64,7 +64,6 @@ struct Output {
 #[derive(Default)]
 struct FrameState {
     format: Option<(wl_shm::Format, u32, u32, u32)>,
-    damage: Vec<Region>,
     ready: bool,
     failed: bool,
 }
@@ -324,17 +323,6 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
                     state.frame.format = Some((format, width, height, stride));
                 }
             }
-            zwlr_screencopy_frame_v1::Event::Damage {
-                x,
-                y,
-                width,
-                height,
-            } => state.frame.damage.push(Region {
-                x: x as i32,
-                y: y as i32,
-                width,
-                height,
-            }),
             zwlr_screencopy_frame_v1::Event::Ready { .. } => state.frame.ready = true,
             zwlr_screencopy_frame_v1::Event::Failed => state.frame.failed = true,
             _ => {}
