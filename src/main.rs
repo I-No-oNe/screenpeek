@@ -1,6 +1,10 @@
 //! screenpeek: read the screen as numbered text, then click it by name.
 
+#[cfg(target_os = "linux")]
+mod atspi;
 mod daemon;
+#[cfg(target_os = "linux")]
+mod fuse;
 mod index;
 mod ocr;
 mod pointer;
@@ -64,11 +68,28 @@ enum Command {
     /// Type text into whatever has focus
     Type { text: String },
 
+    /// Press a key or a combination, such as ctrl+s
+    Key { combination: String },
+
+    /// Run several steps against one scan: click, type, key, wait
+    Run {
+        /// Steps such as "click Save", "type report", "key enter", "wait Done"
+        #[arg(required = true)]
+        steps: Vec<String>,
+
+        #[command(flatten)]
+        area: Area,
+    },
+
     /// Keep the models loaded in the background, so later commands are faster
     Serve,
 
     /// Say whether a daemon is running
     Status,
+
+    /// List what the accessibility tree reports, window by window
+    #[cfg(target_os = "linux")]
+    Tree,
 
     /// Read an image file instead of the screen, for testing and debugging
     Read {
@@ -140,7 +161,25 @@ fn main() -> Result<()> {
 
         Command::Type { text } => Pointer::new()?.type_text(&text)?,
 
+        Command::Key { combination } => Pointer::new()?.press(&combination)?,
+
+        Command::Run { steps, area } => run(&steps, &area)?,
+
         Command::Serve => daemon::serve()?,
+
+        #[cfg(target_os = "linux")]
+        Command::Tree => {
+            let started = std::time::Instant::now();
+            let windows = atspi::windows()?;
+            let elapsed = started.elapsed();
+            for window in &windows {
+                println!("{} ({}x{})", window.title, window.width, window.height);
+                for item in &window.items {
+                    println!("  {} @{},{}", item.text, item.x, item.y);
+                }
+            }
+            eprintln!("{} window(s) in {}ms", windows.len(), elapsed.as_millis());
+        }
 
         Command::Status => println!("{}", daemon::endpoint_summary()?),
 
@@ -173,6 +212,52 @@ fn main() -> Result<()> {
 }
 
 /// Control tree where the platform has one, daemon when it runs, else OCR.
+/// Runs a sequence of steps against one scan, rescanning only when a step
+/// cannot be answered from what is already known.
+fn run(steps: &[String], area: &Area) -> Result<()> {
+    let mut pointer = Pointer::new()?;
+    let mut snapshot: Option<Snapshot> = None;
+
+    for step in steps {
+        let (verb, argument) = step.split_once(' ').unwrap_or((step.as_str(), ""));
+        match verb {
+            "click" | "wait" | "fill" => {
+                let (target, text) = match verb {
+                    "fill" => argument.split_once(" with ").unwrap_or((argument, "")),
+                    _ => (argument, ""),
+                };
+
+                let known = snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.can_resolve(target));
+                if !known {
+                    snapshot = Some(Snapshot::new(scan(area)?));
+                }
+                let current = snapshot.as_ref().expect("just scanned");
+                let element = current.find(target)?;
+
+                if verb == "wait" {
+                    println!("{element}");
+                    continue;
+                }
+
+                pointer.click(element.x, element.y, Button::Left, 1)?;
+                println!("{element}");
+                if verb == "fill" {
+                    pointer.wait_for_focus();
+                    pointer.type_text(text)?;
+                }
+                snapshot = None;
+            }
+            "type" => pointer.type_text(argument)?,
+            "key" => pointer.press(argument)?,
+            other => anyhow::bail!("unknown step {other:?} in {step:?}"),
+        }
+    }
+
+    Ok(())
+}
+
 fn scan(area: &Area) -> Result<Vec<Element>> {
     let elements = match controls(area) {
         Some(elements) => elements,
@@ -184,6 +269,7 @@ fn scan(area: &Area) -> Result<Vec<Element>> {
             }
         },
     };
+    let elements = with_tree_text(elements);
     Snapshot::new(elements.clone())
         .save()
         .context("cannot cache this scan")?;
@@ -200,6 +286,21 @@ fn resolve(target: &str, fresh: bool, area: &Area) -> Result<Snapshot> {
         }
     }
     Ok(Snapshot::new(scan(area)?))
+}
+
+/// Replaces what was recognized with what the accessibility tree says, for the
+/// windows that expose one and that enough labels place on screen.
+#[cfg(target_os = "linux")]
+fn with_tree_text(elements: Vec<Element>) -> Vec<Element> {
+    match atspi::windows() {
+        Ok(windows) if !windows.is_empty() => fuse::fuse(elements, &windows),
+        _ => elements,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn with_tree_text(elements: Vec<Element>) -> Vec<Element> {
+    elements
 }
 
 #[cfg(windows)]
