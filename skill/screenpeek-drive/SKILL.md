@@ -1,6 +1,6 @@
 ---
 name: screenpeek-drive
-description: Drive a desktop application end to end - click buttons, fill fields, press keys, confirm dialogs, wait for a screen to settle - in as few commands as possible. Use for any request to operate a running GUI: "click Save", "fill in the form", "open the file and export it", "press ctrl+s", "close the dialog", "wait until the export finishes", "do this in the app for me". Also use when several UI steps must happen in a row, or when an earlier scan is already in hand and the next thing to do is act on it.
+description: Use when a running desktop application has to be operated rather than merely read - clicking a button, filling a field, pressing a key, confirming or dismissing a dialog, carrying out several UI steps in a row, or waiting for a screen before acting on it. Also use when a scan is already in hand and the next thing to do is act on it.
 ---
 
 # Driving an application with screenpeek

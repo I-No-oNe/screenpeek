@@ -1,6 +1,6 @@
 ---
 name: screenpeek
-description: Read what is on the screen as text with coordinates, and click or type into it, without taking a screenshot. Use for any request to see, read, find, click, press, fill in, or wait for something in a running desktop application or GUI — "what does the screen say", "click the Save button", "type into the search box", "is the dialog still open", "drive this app". Also use instead of a screenshot when a screenshot was about to be taken to locate something textual.
+description: Use when a task needs to know what is currently on the screen of a running desktop application - reading a window, finding a control, checking whether a dialog, error or result is showing, confirming a screen has settled - or when a screenshot was about to be taken to locate something textual. Not for questions about images, colours or visual layout.
 ---
 
 # Reading and driving the screen with screenpeek
