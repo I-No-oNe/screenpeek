@@ -4,7 +4,9 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::thread::sleep;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
@@ -22,6 +24,9 @@ const DIRTY_MARGIN: u32 = 16;
 
 /// Bands closer than this are read as one.
 const BAND_GAP: u32 = 48;
+
+/// How long a freshly started daemon is given to load its models.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -266,10 +271,17 @@ fn context_key(monitor: Option<usize>, origin: (i32, i32)) -> u64 {
     hasher.finish()
 }
 
-/// Asks a running daemon to look. `None` means no daemon, not an error.
+/// Asks a running daemon to look, starting one if there is none. `None` means
+/// the daemon could not be reached and the caller should do the work itself.
 pub fn ask(region: Option<Region>, monitor: Option<usize>) -> Option<Vec<Element>> {
-    let (port, token) = read_endpoint().ok()?;
-    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).ok()?;
+    let mut stream = match connect() {
+        Some(stream) => stream,
+        None => {
+            start()?;
+            connect()?
+        }
+    };
+    let (_, token) = read_endpoint().ok()?;
 
     let request = Request {
         token,
@@ -289,6 +301,37 @@ pub fn ask(region: Option<Region>, monitor: Option<usize>) -> Option<Vec<Element
             None
         }
     }
+}
+
+fn connect() -> Option<TcpStream> {
+    let (port, _) = read_endpoint().ok()?;
+    TcpStream::connect((Ipv4Addr::LOCALHOST, port)).ok()
+}
+
+/// Starts a daemon in the background and waits for it to answer. The first
+/// scan of a session pays for this once; every later one is on the fast path.
+fn start() -> Option<()> {
+    if std::env::var_os("SCREENPEEK_NO_DAEMON").is_some() {
+        return None;
+    }
+
+    let binary = std::env::current_exe().ok()?;
+    Command::new(binary)
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    while Instant::now() < deadline {
+        if connect().is_some() {
+            return Some(());
+        }
+        sleep(Duration::from_millis(100));
+    }
+    None
 }
 
 pub fn endpoint_summary() -> Result<String> {
