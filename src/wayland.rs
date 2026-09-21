@@ -56,6 +56,8 @@ struct Output {
     output: WlOutput,
     x: i32,
     y: i32,
+    width: i32,
+    height: i32,
 }
 
 /// What the compositor has said about the frame in flight.
@@ -142,6 +144,22 @@ impl Screencopy {
             image: buffer.to_image()?,
             origin,
         })
+    }
+
+    /// Captures the output a region starts on.
+    pub fn capture_containing(&mut self, region: Region) -> Result<Capture> {
+        let index = self
+            .state
+            .outputs
+            .iter()
+            .position(|output| {
+                region.x >= output.x
+                    && region.y >= output.y
+                    && region.x < output.x + output.width
+                    && region.y < output.y + output.height
+            })
+            .ok_or_else(|| anyhow!("no output contains {},{}", region.x, region.y))?;
+        self.capture(Some(index))
     }
 
     /// Reuses the buffer unless the output was reconfigured.
@@ -242,7 +260,13 @@ impl Dispatch<WlRegistry, ()> for State {
             }
             "wl_output" => {
                 let output = registry.bind(name, version.min(4), handle, ());
-                state.outputs.push(Output { output, x: 0, y: 0 });
+                state.outputs.push(Output {
+                    output,
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                });
             }
             _ => {}
         }
@@ -258,15 +282,24 @@ impl Dispatch<WlOutput, ()> for State {
         _: &Connection,
         _: &QueueHandle<State>,
     ) {
-        if let wl_output::Event::Geometry { x, y, .. } = event {
-            if let Some(entry) = state
-                .outputs
-                .iter_mut()
-                .find(|entry| entry.output.id() == output.id())
-            {
+        let Some(entry) = state
+            .outputs
+            .iter_mut()
+            .find(|entry| entry.output.id() == output.id())
+        else {
+            return;
+        };
+
+        match event {
+            wl_output::Event::Geometry { x, y, .. } => {
                 entry.x = x;
                 entry.y = y;
             }
+            wl_output::Event::Mode { width, height, .. } => {
+                entry.width = width;
+                entry.height = height;
+            }
+            _ => {}
         }
     }
 }

@@ -21,28 +21,21 @@ rten-imageproc = "0.26"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = "3"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
 xcap = { version = "0.9", features = ["image"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 enigo = { version = "0.6", features = ["wayland"] }
+memmap2 = "0.9"
+tempfile = "3"
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+[target.'cfg(windows)'.dependencies]
+uiautomation = "0.25"
 
 [profile.release]
 lto = true
 codegen-units = 1
 strip = true
-
-[target.'cfg(windows)'.dependencies.uiautomation]
-version = "0.25"
-
-[target.'cfg(target_os = "linux")'.dependencies.memmap2]
-version = "0.9"
-
-[target.'cfg(target_os = "linux")'.dependencies.tempfile]
-version = "3"
-
-[target.'cfg(target_os = "linux")'.dependencies.wayland-client]
-version = "0.31"
-
-[target.'cfg(target_os = "linux")'.dependencies.wayland-protocols-wlr]
-version = "0.3"
-features = ["client"]

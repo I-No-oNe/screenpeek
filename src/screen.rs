@@ -3,9 +3,13 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
+
+#[cfg(not(target_os = "linux"))]
+use anyhow::anyhow;
+#[cfg(not(target_os = "linux"))]
 use xcap::Monitor;
 
 /// A rectangle on the virtual desktop.
@@ -78,48 +82,65 @@ impl Capture {
 /// Captures a monitor, or the part of one covered by `region`. A region is
 /// taken from the monitor it starts on, so scan coordinates can be fed back in.
 pub fn capture(monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
+    let full = full_screen(monitor, region)?;
+    let Some(region) = region else {
+        return Ok(full);
+    };
+    Ok(crop(full, region))
+}
+
+/// Narrows a capture to a region, clamped to what was actually captured.
+pub fn crop(capture: Capture, region: Region) -> Capture {
+    let x = (region.x - capture.origin.0).max(0) as u32;
+    let y = (region.y - capture.origin.1).max(0) as u32;
+    let width = region.width.min(capture.image.width().saturating_sub(x));
+    let height = region.height.min(capture.image.height().saturating_sub(y));
+    if width == 0 || height == 0 {
+        return capture;
+    }
+
+    Capture {
+        image: image::imageops::crop_imm(&capture.image, x, y, width, height).to_image(),
+        origin: (capture.origin.0 + x as i32, capture.origin.1 + y as i32),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn full_screen(monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
+    let mut screencopy = crate::wayland::Screencopy::new()?;
+    match region {
+        Some(region) => screencopy.capture_containing(region),
+        None => screencopy.capture(monitor),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn full_screen(monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
     let monitors = Monitor::all().context("cannot enumerate monitors")?;
     if monitors.is_empty() {
         bail!("no monitors found");
     }
 
-    let Some(region) = region else {
-        let monitor = match monitor {
+    let monitor = match region {
+        Some(region) => monitors
+            .iter()
+            .find(|monitor| bounds(monitor).is_ok_and(|bounds| bounds.contains(region.x, region.y)))
+            .ok_or_else(|| anyhow!("no monitor contains {},{}", region.x, region.y))?,
+        None => match monitor {
             Some(index) => monitors
                 .get(index)
                 .ok_or_else(|| anyhow!("no monitor {index}; found {}", monitors.len()))?,
             None => primary(&monitors)?,
-        };
-        let origin = (monitor.x()?, monitor.y()?);
-        return Ok(Capture {
-            image: monitor.capture_image().context("screen capture failed")?,
-            origin,
-        });
+        },
     };
 
-    let monitor = monitors
-        .iter()
-        .find(|monitor| match bounds(monitor) {
-            Ok(bounds) => bounds.contains(region.x, region.y),
-            Err(_) => false,
-        })
-        .ok_or_else(|| anyhow!("no monitor contains {},{}", region.x, region.y))?;
-
-    let bounds = bounds(monitor)?;
-    let local_x = (region.x - bounds.x) as u32;
-    let local_y = (region.y - bounds.y) as u32;
-    // A region running off the edge captures the part that is on screen.
-    let width = region.width.min(bounds.width - local_x);
-    let height = region.height.min(bounds.height - local_y);
-
     Ok(Capture {
-        image: monitor
-            .capture_region(local_x, local_y, width, height)
-            .context("screen capture failed")?,
-        origin: (region.x, region.y),
+        image: monitor.capture_image().context("screen capture failed")?,
+        origin: (monitor.x()?, monitor.y()?),
     })
 }
 
+#[cfg(not(target_os = "linux"))]
 fn primary(monitors: &[Monitor]) -> Result<&Monitor> {
     if let Some(monitor) = monitors
         .iter()
@@ -130,6 +151,7 @@ fn primary(monitors: &[Monitor]) -> Result<&Monitor> {
     monitors.first().ok_or_else(|| anyhow!("no monitors found"))
 }
 
+#[cfg(not(target_os = "linux"))]
 fn bounds(monitor: &Monitor) -> Result<Region> {
     Ok(Region {
         x: monitor.x()?,
