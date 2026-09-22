@@ -196,11 +196,58 @@ struct Session {
     bands: HashMap<u64, Vec<Element>>,
 }
 
-/// The last full-screen look and what was read out of it.
+/// The last full-screen look and what recognition read out of it. Text that
+/// came from a window's accessibility tree is not kept here: it is asked for
+/// again on every look, which is cheap.
 struct Frame {
     key: u64,
     image: RgbaImage,
+    pixels: Vec<Element>,
+}
+
+/// A window whose contents are known from its tree and whose position is
+/// known from the compositor.
+struct Located {
+    rect: Region,
     elements: Vec<Element>,
+}
+
+/// Recognized text outside the located windows, plus everything those windows
+/// say about themselves.
+fn merge(pixels: Vec<Element>, located: Vec<Located>) -> Vec<Element> {
+    let mut elements: Vec<Element> = pixels
+        .into_iter()
+        .filter(|element| {
+            !located
+                .iter()
+                .any(|window| window.rect.contains(element.x, element.y))
+        })
+        .collect();
+
+    for window in located {
+        elements.extend(window.elements);
+    }
+    index::number(&mut elements);
+    elements
+}
+
+/// The changed areas that no located window accounts for. Anything inside one
+/// is already described by its tree, so the pixels there are not worth reading.
+fn outside(changed: &[Region], located: &[Located], origin: (i32, i32)) -> Vec<Region> {
+    changed
+        .iter()
+        .filter(|area| {
+            let x = area.x + origin.0;
+            let y = area.y + origin.1;
+            !located.iter().any(|window| {
+                x >= window.rect.x
+                    && y >= window.rect.y
+                    && x + area.width as i32 <= window.rect.x + window.rect.width as i32
+                    && y + area.height as i32 <= window.rect.y + window.rect.height as i32
+            })
+        })
+        .copied()
+        .collect()
 }
 
 impl Session {
@@ -236,6 +283,7 @@ impl Session {
         let capture = self.capture(request.monitor)?;
         let captured = started.elapsed();
 
+        let located = self.located_windows();
         let key = context_key(request.monitor, capture.origin);
         let reusable = self
             .previous
@@ -244,29 +292,40 @@ impl Session {
             .filter(|frame| frame.image.dimensions() == capture.image.dimensions());
 
         let recognition = Instant::now();
-        let (elements, what) = match reusable {
+        let (pixels, what) = match reusable {
             None => (self.engine.read(&capture)?, "full"),
             Some(frame) => {
-                let bands = dirty_bands(&frame.image, &capture.image);
-                if bands.is_empty() {
-                    (frame.elements.clone(), "unchanged")
-                } else if worth_patching(&bands, &capture.image) {
+                let changed = dirty_areas(&frame.image, &capture.image);
+                let unread = outside(&changed, &located, capture.origin);
+
+                if unread.is_empty() {
+                    (
+                        frame.pixels.clone(),
+                        if changed.is_empty() {
+                            "unchanged"
+                        } else {
+                            "window only"
+                        },
+                    )
+                } else if worth_patching(&unread, &capture.image) {
                     let kept: Vec<Element> = frame
-                        .elements
+                        .pixels
                         .iter()
                         .filter(|element| {
                             let x = element.x - capture.origin.0;
                             let y = element.y - capture.origin.1;
-                            !bands.iter().any(|band| band.contains(x, y))
+                            !unread.iter().any(|area| area.contains(x, y))
                         })
                         .cloned()
                         .collect();
-                    (self.patch(kept, &capture, &bands)?, "patched")
+                    (self.patch(kept, &capture, &unread)?, "patched")
                 } else {
                     (self.engine.read(&capture)?, "full")
                 }
             }
         };
+
+        let elements = merge(pixels.clone(), located);
 
         eprintln!(
             "{what}: {} elements, capture {}ms, read {}ms",
@@ -278,7 +337,7 @@ impl Session {
         self.previous = Some(Frame {
             key,
             image: capture.image,
-            elements: elements.clone(),
+            pixels,
         });
 
         Ok(match request.region {
@@ -288,6 +347,31 @@ impl Session {
                 .collect(),
             None => elements,
         })
+    }
+
+    /// Windows the accessibility tree describes and the compositor has placed.
+    /// Their text needs no recognition at all.
+    #[cfg(target_os = "linux")]
+    fn located_windows(&self) -> Vec<Located> {
+        let Ok(placements) = crate::read::geometry::windows() else {
+            return Vec::new();
+        };
+        let Ok(windows) = crate::read::atspi::windows() else {
+            return Vec::new();
+        };
+
+        crate::read::fuse::place(&windows, &placements)
+            .into_iter()
+            .map(|placed| Located {
+                rect: placed.rect,
+                elements: placed.elements,
+            })
+            .collect()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn located_windows(&self) -> Vec<Located> {
+        Vec::new()
     }
 
     fn capture(&mut self, monitor: Option<usize>) -> Result<Capture> {
@@ -392,36 +476,60 @@ fn hash_image(image: &RgbaImage) -> u64 {
     hasher.finish()
 }
 
-/// The horizontal bands that differ between two frames, top to bottom.
-fn dirty_bands(before: &RgbaImage, after: &RgbaImage) -> Vec<Region> {
+/// The areas that differ between two frames, top to bottom. Rows close
+/// together are reported as one area, and each one is trimmed to the columns
+/// that actually changed so a change inside a window stays inside it.
+fn dirty_areas(before: &RgbaImage, after: &RgbaImage) -> Vec<Region> {
     let width = before.width();
     let height = before.height();
     let stride = width as usize * 4;
     let (before, after) = (before.as_raw(), after.as_raw());
 
-    let changed = |row: usize| before[row * stride..][..stride] != after[row * stride..][..stride];
+    fn row(image: &[u8], index: usize, stride: usize) -> &[u8] {
+        &image[index * stride..][..stride]
+    }
+    let changed = |index: usize| row(before, index, stride) != row(after, index, stride);
 
     let mut bands: Vec<(u32, u32)> = Vec::new();
-    for row in 0..height as usize {
-        if !changed(row) {
+    for index in 0..height as usize {
+        if !changed(index) {
             continue;
         }
-        let row = row as u32;
+        let index = index as u32;
         match bands.last_mut() {
-            Some((_, end)) if row - *end <= BAND_GAP => *end = row,
-            _ => bands.push((row, row)),
+            Some((_, end)) if index - *end <= BAND_GAP => *end = index,
+            _ => bands.push((index, index)),
         }
     }
 
     bands
         .into_iter()
         .map(|(start, end)| {
+            let (mut first, mut last) = (width, 0);
+            for index in start..=end {
+                if !changed(index as usize) {
+                    continue;
+                }
+                let old = row(before, index as usize, stride);
+                let new = row(after, index as usize, stride);
+                for column in 0..width {
+                    let pixel = column as usize * 4;
+                    if old[pixel..pixel + 4] != new[pixel..pixel + 4] {
+                        first = first.min(column);
+                        last = last.max(column);
+                    }
+                }
+            }
+
+            let left = first.saturating_sub(DIRTY_MARGIN);
+            let right = (last + DIRTY_MARGIN + 1).min(width);
             let top = start.saturating_sub(DIRTY_MARGIN);
             let bottom = (end + DIRTY_MARGIN + 1).min(height);
+
             Region {
-                x: 0,
+                x: left as i32,
                 y: top as i32,
-                width,
+                width: right.saturating_sub(left).max(1),
                 height: bottom - top,
             }
         })
@@ -595,8 +703,8 @@ mod tests {
     }
 
     #[test]
-    fn identical_frames_have_no_bands() {
-        assert!(dirty_bands(&frame(64, 64, 0), &frame(64, 64, 0)).is_empty());
+    fn identical_frames_have_no_changed_areas() {
+        assert!(dirty_areas(&frame(64, 64, 0), &frame(64, 64, 0)).is_empty());
     }
 
     #[test]
@@ -605,7 +713,7 @@ mod tests {
         let mut after = before.clone();
         paint_row(&mut after, 200);
 
-        let bands = dirty_bands(&before, &after);
+        let bands = dirty_areas(&before, &after);
         assert_eq!(bands.len(), 1);
         assert_eq!(bands[0].y, 200 - DIRTY_MARGIN as i32);
         assert_eq!(bands[0].height, 2 * DIRTY_MARGIN + 1);
@@ -619,7 +727,7 @@ mod tests {
         paint_row(&mut after, 20);
         paint_row(&mut after, 500);
 
-        let bands = dirty_bands(&before, &after);
+        let bands = dirty_areas(&before, &after);
         assert_eq!(bands.len(), 2, "{bands:?}");
         assert!(bands[0].y < bands[1].y);
     }
@@ -631,7 +739,7 @@ mod tests {
         paint_row(&mut after, 100);
         paint_row(&mut after, 100 + BAND_GAP - 1);
 
-        assert_eq!(dirty_bands(&before, &after).len(), 1);
+        assert_eq!(dirty_areas(&before, &after).len(), 1);
     }
 
     #[test]
