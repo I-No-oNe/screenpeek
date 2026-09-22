@@ -23,6 +23,8 @@ Tokens counted with `o200k_base`; image cost uses OpenAI's high-detail formula.
 | Unchanged frame (daemon cache) | 0 ms after capture |
 | Hebrew changed band vs full frame | ~290 ms vs ~1,100 ms |
 | First daemon read (model warm-up) | ~870 ms |
+| Accessibility tree, Nautilus window | ~65 ms |
+| Typing 700 plain characters (Wayland) | ~55 ms |
 
 In one side-by-side run against dogtail on the same GTK window, screenpeek
 returned 63 uniquely clickable names in 70 ms against dogtail's 38 in 568 ms.
@@ -36,6 +38,7 @@ cargo build --release --locked
 python3 bench/measure.py --all            # accuracy and CLI latency
 python3 bench/compare_tools.py --runs 7   # built-in OCR vs Tesseract
 uv run --with tiktoken python bench/compare.py   # token counts
+python3 bench/tasks.py bench/tasks.example.json # scripted tasks vs screenshot tokens
 cargo test --release --bin screenpeek -- --ignored --nocapture --test-threads=1
 ```
 

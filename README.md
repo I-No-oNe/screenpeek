@@ -23,6 +23,10 @@ numbered list of `id text @x,y`, then clicks by name or ID.
   model round trip per step, no API key, no screenshots leave the machine.
 - **Exact targets.** Clicks land on the centre of a named element. Ambiguous
   names fail with a list of candidates instead of clicking the wrong one.
+- **Built for agent loops.** `wait` polls for a label instead of guessing
+  sleeps, IDs stay stable across scans, and roles and states (`[checked]`,
+  `[disabled]`) come from the accessibility tree. Also `scroll`, `drag` and an
+  MCP server.
 
 **vs. other tools:**
 

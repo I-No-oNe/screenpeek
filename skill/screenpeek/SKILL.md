@@ -14,11 +14,13 @@ clicks the exact centre of a named element.
 ```sh
 screenpeek scan --grep "Save"     # 7 Save @412,318  (id text @x,y)
 screenpeek scan --focused         # everything in the focused window
-screenpeek scan --json            # adds size and source (ocr or tree)
+screenpeek scan --json            # adds size, source, role and states
 ```
 
 Prefer `--grep` or `--focused` over a full listing. An empty `--grep` result
-exits 0: read the output, not the exit code.
+exits 0: read the output, not the exit code. States such as `[checked]` or
+`[disabled]` follow the position when the app reports them. IDs stay the same
+across scans while an element does not move.
 
 ## Act
 
@@ -26,13 +28,18 @@ exits 0: read the output, not the exit code.
 screenpeek click "Save" --fresh
 screenpeek fill "Search" "cats" --fresh      # clicks, then types; does not clear
 screenpeek key ctrl+s
-screenpeek run "click File" "click Save As" "type report.pdf" "key enter"
+screenpeek wait "Saved" --timeout 10          # polls; --gone waits for it to vanish
+screenpeek scroll down 5 --at "Results"
+screenpeek drag "report.pdf" "Trash"
+screenpeek run "click File" "click Save As" "type report.pdf" "key enter" "wait Saved"
 ```
 
 - Use `--fresh` after anything that moved the layout.
+- Use `wait` instead of sleeping while an app loads or a dialog opens.
+- `click --check` warns when nothing near the target changed.
 - Ambiguous names fail and list candidates: click by the listed ID instead.
 - `run` steps: `click T`, `fill T with TEXT`, `type TEXT`, `key COMBO`,
-  `wait T` (checks once, no polling). It stops at the first failure.
+  `wait T`, `scroll down 3`, `drag A to B`. It stops at the first failure.
 - After acting, verify with `scan --grep` before the next decision.
 - Never guess coordinates for something absent from the scan.
 

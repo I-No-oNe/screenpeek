@@ -21,29 +21,37 @@ cargo install --path . --locked
 | Command | Purpose |
 | --- | --- |
 | `scan [--json] [--grep TEXT]` | List visible text and accessible controls |
-| `click TARGET [--fresh] [--button right] [--double]` | Click by name or scan ID |
+| `click TARGET [--fresh] [--check] [--button right] [--double]` | Click by name or scan ID |
 | `fill TARGET TEXT [--fresh]` | Click, then type (does not clear the field) |
 | `type TEXT` / `key ctrl+s` | Input to the focused app |
+| `wait TARGET [--timeout 10] [--gone]` | Poll until an element appears or disappears |
+| `scroll DIRECTION [N] [--at TARGET]` | Scroll the wheel, optionally over an element |
+| `drag FROM TO` | Drag one element onto another |
 | `run STEP...` | Run steps in order, stop on the first error |
 | `read IMAGE [--scale N] [--lang CODE]` | Read a PNG instead of the screen |
 | `serve` / `status` | Run / check the background daemon |
+| `mcp` | Serve the commands as MCP tools over stdio |
 | `languages` / `tree` | List Tesseract languages / accessibility labels |
 
-`scan`, `click`, `fill` and `run` take one of `--region X,Y,W,H`,
+`scan`, `click`, `fill`, `wait` and `run` take one of `--region X,Y,W,H`,
 `--monitor N` or `--focused`, plus `--lang CODE`.
 
 Matching is case-insensitive: exact, then prefix, then substring, then
 OCR-tolerant (`Fi1e` matches `File`, accents ignored). Several matches fail
-and list the candidates. IDs refer to the last scan. An empty `scan --grep` is
-not an error, so check the output.
+and list the candidates. IDs stay stable across scans for elements that do not
+move. An empty `scan --grep` is not an error, so check the output.
+
+With an accessibility tree, `--json` adds `role` (button, checkbox, entry...)
+and `states`; the text listing appends states such as `[checked disabled]`.
+`click --check` warns when the pixels around the target did not change.
 
 ```sh
 screenpeek run "click File" "click Save As" "type report.pdf" "key enter"
 ```
 
 Steps: `click TARGET`, `fill TARGET with TEXT`, `type TEXT`, `key COMBO`,
-`wait TARGET` (checks once, does not poll). Keys include modifiers, F1–F12,
-arrows, characters and names like `slash` or `plus`.
+`wait TARGET` (polls up to 10 s), `scroll DIRECTION [N]`, `drag A to B`. Keys
+include modifiers, F1–F12, arrows, characters and names like `slash` or `plus`.
 
 ## Daemon
 
