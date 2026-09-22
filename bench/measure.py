@@ -51,7 +51,7 @@ def clickable(label, elements, targets):
 
 
 # Arabic baseline is 7/12; raise its floor after recognition improves.
-FLOORS = {"ara": 0.55}
+FLOORS = {}
 DEFAULT_FLOOR = 0.90
 
 

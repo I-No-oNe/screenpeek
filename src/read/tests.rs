@@ -156,6 +156,9 @@ fn different_shapes_split_even_when_adjacent() {
         &[],
     );
     assert_eq!(by_centre.len(), 2);
+    // A descender word beside a digit shares its top: one label.
+    let descender = separate_controls(&[vec![word(0., 0., 16., 80.), word(0., 84., 12., 8.)]], &[]);
+    assert_eq!(descender.len(), 1);
     // Same height and baseline, one space apart: still one label.
     let together = separate_controls(
         &[vec![word(0., 0., 12., 30.), word(0., 34., 12., 20.)]],

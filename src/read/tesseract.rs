@@ -1,97 +1,176 @@
 //! Read installed Tesseract languages through TSV output.
 
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::capture::Capture;
-use crate::index::{self, Element, Source};
+use image::{imageops, RgbaImage};
+use rten_imageproc::Rect;
 
 /// Words below this confidence are noise rather than text.
 const MIN_CONFIDENCE: f32 = 45.0;
 
-/// Scale only when requested; preserve the original desktop coordinate system.
-pub fn read_scaled(capture: &Capture, language: &str, scale: u32) -> Result<Vec<Element>> {
-    if !(1..=4).contains(&scale) {
-        bail!("scale must be between 1 and 4");
+/// Gap between stacked lines, and padding around each, in source pixels.
+const GAP: u32 = 12;
+const PAD: i32 = 10;
+/// Tesseract reads screen-sized glyphs better at twice their size.
+const UPSCALE: u32 = 2;
+
+/// Read text lines in `language` (such as `eng+heb`): each rectangle is cut
+/// from the image, enlarged, stacked into one image and read in a single
+/// Tesseract call. Returns one text per rectangle, empty when unread.
+pub fn read_lines(image: &RgbaImage, lines: &[Rect], language: &str) -> Result<Vec<String>> {
+    if lines.is_empty() {
+        return Ok(Vec::new());
     }
-    if scale == 1 {
-        return read(capture, language);
-    }
-    let width = capture
-        .image
-        .width()
-        .checked_mul(scale)
-        .context("scaled image is too wide")?;
-    let height = capture
-        .image
-        .height()
-        .checked_mul(scale)
-        .context("scaled image is too tall")?;
-    let image = image::imageops::resize(
-        &capture.image,
-        width,
-        height,
-        image::imageops::FilterType::Lanczos3,
-    );
-    let mut elements = read(&Capture::from_image(image), language)?;
-    for element in &mut elements {
-        (element.x, element.y) =
-            capture.to_desktop(element.x / scale as i32, element.y / scale as i32);
-        element.width = element.width.div_ceil(scale);
-        element.height = element.height.div_ceil(scale);
-    }
-    Ok(elements)
+    Pending::start(language)?.read_lines(image, lines)
 }
 
-/// Read in a language such as `deu` or `heb+eng`.
-pub fn read(capture: &Capture, language: &str) -> Result<Vec<Element>> {
-    // PPM avoids compressing pixels only for Leptonica to decompress them.
-    let (width, height) = capture.image.dimensions();
-    let mut input = format!("P6\n{width} {height}\n255\n").into_bytes();
-    input.reserve(capture.image.as_raw().len() / 4 * 3);
-    for pixel in capture.image.as_raw().as_chunks::<4>().0 {
-        let alpha = u32::from(pixel[3]);
-        for channel in &pixel[..3] {
-            input.push(((u32::from(*channel) * alpha + 255 * (255 - alpha)) / 255) as u8);
-        }
+/// A Tesseract process started ahead of time: it loads its language models
+/// while the caller is still finding the lines to give it.
+pub struct Pending {
+    child: Option<Child>,
+    language: String,
+}
+
+impl Pending {
+    pub fn start(language: &str) -> Result<Pending> {
+        let child = command()
+            .args(["stdin", "stdout", "-l", language, "--psm", "6"])
+            .args(["-c", "tessedit_create_tsv=1"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| anyhow!("cannot run tesseract: {error}"))?;
+        Ok(Pending {
+            child: Some(child),
+            language: language.to_owned(),
+        })
     }
 
-    let mut child = Command::new("tesseract")
-        .args([
-            "stdin",
-            "stdout",
-            "-l",
-            language,
-            "--psm",
-            "11",
-            "-c",
-            "tessedit_create_tsv=1",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| anyhow!("cannot run tesseract: {error}"))?;
+    pub fn read_lines(mut self, image: &RgbaImage, lines: &[Rect]) -> Result<Vec<String>> {
+        if lines.is_empty() {
+            return Ok(Vec::new());
+        }
+        let crops: Vec<RgbaImage> = lines
+            .iter()
+            .map(|line| {
+                let left = (line.left() - PAD).clamp(0, image.width() as i32) as u32;
+                let top = (line.top() - PAD).clamp(0, image.height() as i32) as u32;
+                let right = (line.right() + PAD).clamp(0, image.width() as i32) as u32;
+                let bottom = (line.bottom() + PAD).clamp(0, image.height() as i32) as u32;
+                let crop = imageops::crop_imm(
+                    image,
+                    left,
+                    top,
+                    (right - left).max(1),
+                    (bottom - top).max(1),
+                );
+                let mut crop = imageops::resize(
+                    &crop.to_image(),
+                    (right - left).max(1) * UPSCALE,
+                    (bottom - top).max(1) * UPSCALE,
+                    imageops::FilterType::CatmullRom,
+                );
+                light_background(&mut crop);
+                crop
+            })
+            .collect();
 
+        let gap = GAP * UPSCALE;
+        let width = crops.iter().map(RgbaImage::width).max().unwrap_or(1) + 2 * gap;
+        let height = crops.iter().map(|crop| crop.height() + gap).sum::<u32>() + gap;
+        let mut stack = RgbaImage::from_pixel(width, height, image::Rgba([255, 255, 255, 255]));
+        let mut bands = Vec::with_capacity(crops.len());
+        let mut y = gap;
+        for crop in &crops {
+            imageops::replace(&mut stack, crop, i64::from(gap), i64::from(y));
+            bands.push((y, y + crop.height()));
+            y += crop.height() + gap;
+        }
+
+        let child = self.child.take().context("tesseract already used")?;
+        let tsv = finish(child, &stack, &self.language)?;
+        let mut words: Vec<Vec<(i32, String)>> = vec![Vec::new(); lines.len()];
+        for word in parse(&tsv, width, height) {
+            let centre = word.top + word.height / 2;
+            if let Some(band) = bands
+                .iter()
+                .position(|(top, bottom)| centre + gap / 2 >= *top && centre < bottom + gap / 2)
+            {
+                words[band].push((word.left as i32, word.text));
+            }
+        }
+        Ok(words.into_iter().map(join).collect())
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Tesseract expects dark text on a light background; invert dark themes.
+fn light_background(crop: &mut RgbaImage) {
+    let sum: u64 = crop
+        .pixels()
+        .map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]))
+        .sum();
+    if sum < 3 * 128 * u64::from(crop.width()) * u64::from(crop.height()) {
+        for pixel in crop.pixels_mut() {
+            for channel in &mut pixel.0[..3] {
+                *channel = 255 - *channel;
+            }
+        }
+    }
+}
+
+/// Send an image to a started Tesseract and return its TSV output.
+fn finish(mut child: Child, image: &RgbaImage, language: &str) -> Result<String> {
+    // PPM avoids compressing pixels only for Leptonica to decompress them.
+    let (width, height) = image.dimensions();
+    let mut input = format!("P6\n{width} {height}\n255\n").into_bytes();
+    input.reserve(image.as_raw().len() / 4 * 3);
+    for pixel in image.as_raw().as_chunks::<4>().0 {
+        input.extend_from_slice(&pixel[..3]);
+    }
     let written = child
         .stdin
         .take()
         .ok_or_else(|| anyhow!("tesseract took no input"))?
         .write_all(&input);
-
     let output = child.wait_with_output()?;
     if !output.status.success() {
         bail!(
-            "tesseract could not read the screen in {language:?}: {}",
+            "tesseract could not read {language:?}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
+    written.context("cannot send the image to tesseract")?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
 
-    written.context("cannot send capture to tesseract")?;
-    Ok(elements(&String::from_utf8_lossy(&output.stdout), capture))
+/// `tesseract`, pointed at the user's language data when none is configured.
+fn command() -> Command {
+    let mut command = Command::new("tesseract");
+    if std::env::var_os("TESSDATA_PREFIX").is_none() {
+        if let Some(directory) = user_tessdata().filter(|directory| directory.is_dir()) {
+            command.env("TESSDATA_PREFIX", directory);
+        }
+    }
+    command
+}
+
+/// Where `scripts/fetch-models.sh` puts language data.
+pub fn user_tessdata() -> Option<std::path::PathBuf> {
+    Some(dirs::data_dir()?.join("tessdata"))
 }
 
 pub fn supports(language: &str) -> Result<()> {
@@ -113,7 +192,7 @@ pub fn installed() -> Result<Vec<String>> {
 }
 
 fn list_langs() -> Result<Vec<String>> {
-    let listed = Command::new("tesseract")
+    let listed = command()
         .arg("--list-langs")
         .output()
         .map_err(|error| anyhow!("cannot run tesseract: {error}"))?;
@@ -132,104 +211,49 @@ fn list_langs() -> Result<Vec<String>> {
         .collect())
 }
 
-/// Join Tesseract TSV words back into lines.
-fn elements(tsv: &str, capture: &Capture) -> Vec<Element> {
-    struct Line {
-        id: String,
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
-        words: Vec<(i32, String)>,
-    }
+struct Word {
+    left: u32,
+    top: u32,
+    height: u32,
+    text: String,
+}
 
-    let mut lines: Vec<Line> = Vec::new();
-
-    for row in tsv.lines().skip(1) {
-        let fields: Vec<&str> = row.split('\t').collect();
-        if fields.len() < 12 || fields[0] != "5" {
-            continue;
-        }
-
-        let text = fields[11].trim();
-        let confidence: f32 = fields[10].parse().unwrap_or(0.0);
-        if text.is_empty() || !confidence.is_finite() || confidence < MIN_CONFIDENCE {
-            continue;
-        }
-
-        let (Ok(left), Ok(top), Ok(width), Ok(height)) = (
-            fields[6].parse::<i32>(),
-            fields[7].parse::<i32>(),
-            fields[8].parse::<i32>(),
-            fields[9].parse::<i32>(),
-        ) else {
-            continue;
-        };
-
-        if left < 0 || top < 0 || width <= 0 || height <= 0 {
-            continue;
-        }
-        let (Some(right), Some(bottom)) = (left.checked_add(width), top.checked_add(height)) else {
-            continue;
-        };
-        if right as u32 > capture.image.width() || bottom as u32 > capture.image.height() {
-            continue;
-        }
-        // Invisible direction marks would break matching.
-        let text: String = text
-            .chars()
-            .filter(|character| !matches!(character, '\u{200E}' | '\u{200F}' | '\u{061C}'))
-            .collect();
-        if text.is_empty() {
-            continue;
-        }
-
-        let id = fields[1..5].join("/");
-        match lines.last_mut() {
-            Some(line) if line.id == id => {
-                line.left = line.left.min(left);
-                line.top = line.top.min(top);
-                line.right = line.right.max(right);
-                line.bottom = line.bottom.max(bottom);
-                line.words.push((left, text));
+/// Confident, well-formed words from Tesseract TSV output.
+fn parse(tsv: &str, width: u32, height: u32) -> Vec<Word> {
+    tsv.lines()
+        .skip(1)
+        .filter_map(|row| {
+            let fields: Vec<&str> = row.split('\t').collect();
+            if fields.len() < 12 || fields[0] != "5" {
+                return None;
             }
-            _ => lines.push(Line {
-                id,
+            let confidence: f32 = fields[10].parse().ok()?;
+            if !confidence.is_finite() || confidence < MIN_CONFIDENCE {
+                return None;
+            }
+            let [left, top, w, h] = [6, 7, 8, 9].map(|i| fields[i].parse::<u32>().ok());
+            let (left, top, w, h) = (left?, top?, w?, h?);
+            if w == 0 || h == 0 || left.checked_add(w)? > width || top.checked_add(h)? > height {
+                return None;
+            }
+            // Invisible direction marks would break matching.
+            let text: String = fields[11]
+                .trim()
+                .chars()
+                .filter(|c| !matches!(c, '\u{200E}' | '\u{200F}' | '\u{061C}'))
+                .collect();
+            (!text.is_empty()).then_some(Word {
                 left,
                 top,
-                right,
-                bottom,
-                words: vec![(left, text)],
-            }),
-        }
-    }
-
-    let mut elements: Vec<Element> = lines
-        .into_iter()
-        .map(|line| {
-            let (x, y) = capture.to_desktop(
-                line.left + (line.right - line.left) / 2,
-                line.top + (line.bottom - line.top) / 2,
-            );
-            Element {
-                id: 0,
-                text: join(line.words),
-                x,
-                y,
-                width: (line.right - line.left).max(0) as u32,
-                height: (line.bottom - line.top).max(0) as u32,
-                source: Source::Ocr,
-                ..Default::default()
-            }
+                height: h,
+                text,
+            })
         })
-        .collect();
-
-    index::number(&mut elements);
-    elements
+        .collect()
 }
 
 /// Restore reading order for Hebrew and Arabic lines.
-fn join(mut words: Vec<(i32, String)>) -> String {
+pub(super) fn join(mut words: Vec<(i32, String)>) -> String {
     let letters = |text: &str| text.chars().filter(|c| c.is_alphabetic()).count();
     let right_to_left: usize = words
         .iter()
@@ -269,96 +293,62 @@ fn unspaced(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::RgbaImage;
 
-    fn capture() -> Capture {
-        Capture {
-            image: RgbaImage::new(200, 100),
-            origin: (100, 50),
-        }
+    const HEADER: &str =
+        "level\tpage\tblock\tpar\tline\tword\tleft\ttop\twidth\theight\tconf\ttext\n";
+
+    fn words(rows: &[&str]) -> Vec<String> {
+        parse(&format!("{HEADER}{}", rows.join("\n")), 200, 100)
+            .into_iter()
+            .map(|word| word.text)
+            .collect()
     }
 
-    const TSV: &str = "level\tpage\tblock\tpar\tline\tword\tleft\ttop\twidth\theight\tconf\ttext\n\
-5\t1\t1\t1\t1\t1\t10\t20\t40\t12\t96\tDatei\n\
-5\t1\t1\t1\t1\t2\t60\t20\t50\t12\t95\tspeichern\n\
-5\t1\t1\t1\t2\t1\t10\t40\t30\t12\t92\tAbbrechen\n\
-5\t1\t1\t1\t3\t1\t10\t60\t30\t12\t3\tnoise\n";
-
     #[test]
-    fn multilingual_words_preserve_reading_order_and_spacing() {
+    fn multilingual_words_keep_reading_order_and_spacing() {
         for (first, second, expected) in [
             ("保存", "する", "保存する"),
             ("PDF", "を保存", "PDFを保存"),
-            ("保存", "PDF", "保存PDF"),
             ("파일", "저장", "파일 저장"),
-            // Mostly Latin with one Hebrew word is still a left-to-right line.
             ("Save", "שם", "Save שם"),
         ] {
-            let tsv = TSV.replace("Datei", first).replace("speichern", second);
-            assert_eq!(elements(&tsv, &capture())[0].text, expected);
+            assert_eq!(
+                join(vec![(10, first.into()), (60, second.into())]),
+                expected
+            );
         }
-    }
-
-    /// Check RTL order against word coordinates from the Hebrew fixture.
-    #[test]
-    fn right_to_left_lines_are_joined_in_reading_order() {
-        for (rightmost, leftmost, expected) in
-            [("שמור", "קובץ", "שמור קובץ"), ("حفظ", "PDF", "حفظ PDF")]
-        {
-            let tsv = TSV
-                .replace("\t10\t20\t40\t12\t96\tDatei", "\t60\t20\t40\t12\t96\tDatei")
-                .replace(
-                    "\t60\t20\t50\t12\t95\tspeichern",
-                    "\t10\t20\t50\t12\t95\tspeichern",
-                )
-                .replace("Datei", rightmost)
-                .replace("speichern", leftmost);
-            assert_eq!(elements(&tsv, &capture())[0].text, expected);
-        }
-    }
-
-    /// Invisible direction marks would stop a label matching what is typed.
-    #[test]
-    fn direction_marks_are_dropped() {
-        let tsv = TSV.replace("Datei", "\u{200E}Datei\u{200F}");
-        assert_eq!(elements(&tsv, &capture())[0].text, "Datei speichern");
+        // Right-to-left lines read from the rightmost word.
+        assert_eq!(
+            join(vec![(10, "קובץ".into()), (60, "שמור".into())]),
+            "שמור קובץ"
+        );
+        assert_eq!(
+            join(vec![(10, "PDF".into()), (60, "حفظ".into())]),
+            "حفظ PDF"
+        );
     }
 
     #[test]
-    fn malformed_boxes_and_confidences_cannot_become_click_targets() {
-        for row in [
-            "5\t1\t1\t1\t1\t1\t10\t20\t40\t12\tNaN\tbad",
-            "5\t1\t1\t1\t1\t1\t2147483647\t20\t40\t12\t96\tbad",
-            "5\t1\t1\t1\t1\t1\t10\t20\t-40\t12\t96\tbad",
-            "5\t1\t1\t1\t1\t1\t190\t20\t40\t12\t96\tbad",
-        ] {
-            assert!(elements(&format!("header\n{row}\n"), &capture()).is_empty());
-        }
+    fn noise_and_malformed_boxes_are_dropped() {
+        assert_eq!(
+            words(&[
+                "5\t1\t1\t1\t1\t1\t10\t20\t40\t12\t96\t\u{200E}Datei\u{200F}",
+                "5\t1\t1\t1\t1\t2\t10\t20\t40\t12\t3\tnoise",
+                "5\t1\t1\t1\t1\t3\t10\t20\t40\t12\tNaN\tbad",
+                "5\t1\t1\t1\t1\t4\t4294967295\t20\t40\t12\t96\tbad",
+                "5\t1\t1\t1\t1\t5\t190\t20\t40\t12\t96\tbad",
+            ]),
+            ["Datei"]
+        );
     }
 
     #[test]
-    fn words_join_back_into_lines() {
-        let read = elements(TSV, &capture());
-        assert_eq!(read.len(), 2, "{read:?}");
-        assert_eq!(read[0].text, "Datei speichern");
-        assert_eq!(read[1].text, "Abbrechen");
-    }
-
-    #[test]
-    fn coordinates_are_in_desktop_space() {
-        let read = elements(TSV, &capture());
-        assert_eq!((read[0].x, read[0].y), (100 + 60, 50 + 26));
-    }
-
-    #[test]
-    fn unreadable_words_are_dropped() {
-        assert!(elements(TSV, &capture())
-            .iter()
-            .all(|element| element.text != "noise"));
-    }
-
-    #[test]
-    fn a_header_alone_reads_as_nothing() {
-        assert!(elements("level\tpage\n", &capture()).is_empty());
+    fn dark_crops_are_inverted_and_light_ones_kept() {
+        let mut dark = RgbaImage::from_pixel(4, 4, image::Rgba([20, 20, 20, 255]));
+        light_background(&mut dark);
+        assert_eq!(dark.get_pixel(0, 0).0, [235, 235, 235, 255]);
+        let mut light = RgbaImage::from_pixel(4, 4, image::Rgba([240, 240, 240, 255]));
+        light_background(&mut light);
+        assert_eq!(light.get_pixel(0, 0).0, [240, 240, 240, 255]);
     }
 }

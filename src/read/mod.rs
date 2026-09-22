@@ -28,6 +28,7 @@ use rten_imageproc::{bounding_rect, BoundingRect, Rect, RotatedRect};
 
 use crate::capture::{Capture, Region};
 use crate::index::{Element, Source};
+pub use language::Language;
 
 /// A visible window as the compositor reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +85,8 @@ const LINE_CACHE_SIZE: usize = 4096;
 pub struct Engine {
     inner: OcrEngine,
     lines: Mutex<Lines>,
+    /// Lines already re-read in another language, by pixels and language.
+    reread: Mutex<HashMap<u64, String>>,
 }
 
 /// Keep two cache generations so overflow preserves recently reused lines.
@@ -146,24 +149,41 @@ impl Engine {
         Ok(Engine {
             inner,
             lines: Mutex::new(Lines::default()),
+            reread: Mutex::new(HashMap::new()),
         })
     }
 
     #[cfg(test)]
     pub fn read(&self, capture: &Capture) -> Result<Vec<Element>> {
-        self.read_scaled(capture, 1)
+        self.read_scaled(capture, 1, None)
     }
 
     /// Split neighboring controls at known window edges before recognition.
-    pub fn read_within(&self, capture: &Capture, edges: &[i32]) -> Result<Vec<Element>> {
-        self.read_inner(capture, 1, edges)
+    pub fn read_within(
+        &self,
+        capture: &Capture,
+        edges: &[i32],
+        language: Option<&Language>,
+    ) -> Result<Vec<Element>> {
+        self.read_inner(capture, 1, edges, language)
     }
 
-    pub fn read_scaled(&self, capture: &Capture, scale: u32) -> Result<Vec<Element>> {
-        self.read_inner(capture, scale, &[])
+    pub fn read_scaled(
+        &self,
+        capture: &Capture,
+        scale: u32,
+        language: Option<&Language>,
+    ) -> Result<Vec<Element>> {
+        self.read_inner(capture, scale, &[], language)
     }
 
-    fn read_inner(&self, capture: &Capture, scale: u32, edges: &[i32]) -> Result<Vec<Element>> {
+    fn read_inner(
+        &self,
+        capture: &Capture,
+        scale: u32,
+        edges: &[i32],
+        language: Option<&Language>,
+    ) -> Result<Vec<Element>> {
         let scale = scale.max(1);
         let scaled;
         let pixels = if scale == 1 {
@@ -178,6 +198,11 @@ impl Engine {
             &scaled
         };
 
+        // Tesseract loads its models while the lines are being found.
+        let mut pending = match language {
+            Some(language) if !language.auto => Some(tesseract::Pending::start(&language.codes)?),
+            _ => None,
+        };
         let source = ImageSource::from_bytes(pixels.as_raw(), pixels.dimensions())
             .map_err(|err| anyhow!("cannot read the captured image: {err}"))?;
         let input = self
@@ -214,13 +239,23 @@ impl Engine {
             .filter(|(_, text)| text.is_none())
             .map(|(line, _)| line.clone())
             .collect();
-        let recognized = self
-            .inner
-            .recognize_text(&input, &unread)
-            .map_err(|err| anyhow!("text recognition failed: {err}"))?;
+        // An explicit language re-reads every line, so Tesseract starts now
+        // and runs while the built-in model recognizes the same lines.
+        let explicit = language.filter(|language| !language.auto);
+        let (recognized, early) = std::thread::scope(|scope| {
+            let early = explicit.map(|language| {
+                let rects: Vec<Rect> = keys.iter().map(|(_, rect)| *rect).collect();
+                let keys: Vec<u64> = keys.iter().map(|(key, _)| *key).collect();
+                let pending = pending.take();
+                scope.spawn(move || self.reread_lines(pixels, &keys, &rects, language, pending))
+            });
+            let recognized = self.inner.recognize_text(&input, &unread);
+            (recognized, early.map(|handle| handle.join()))
+        });
+        let recognized = recognized.map_err(|err| anyhow!("text recognition failed: {err}"))?;
         let mut fresh = recognized.into_iter();
         let mut additions = Vec::new();
-        let mut elements = Vec::new();
+        let mut found: Vec<(u64, Rect, String)> = Vec::new();
         for ((key, rect), cached) in keys.into_iter().zip(cached) {
             let text = cached.or_else(|| {
                 let text = fresh
@@ -230,9 +265,33 @@ impl Engine {
                 additions.push((key, text.clone()));
                 Some(text)
             });
-            let Some(text) = text.filter(|text| !text.is_empty()) else {
+            found.push((key, rect, text.unwrap_or_default()));
+        }
+        let rereads = match (early, language) {
+            (Some(done), _) => Some(done.map_err(|_| anyhow!("tesseract thread panicked"))??),
+            (None, Some(language)) => {
+                let texts: Vec<&str> = found.iter().map(|(_, _, text)| text.as_str()).collect();
+                if language::worth_rereading(&texts) {
+                    let keys: Vec<u64> = found.iter().map(|(key, _, _)| *key).collect();
+                    let rects: Vec<Rect> = found.iter().map(|(_, rect, _)| *rect).collect();
+                    Some(self.reread_lines(pixels, &keys, &rects, language, None)?)
+                } else {
+                    None
+                }
+            }
+            (None, None) => None,
+        };
+        for (line, text) in found.iter_mut().zip(rereads.into_iter().flatten()) {
+            if language::prefer(&line.2, &text) {
+                line.2 = text;
+            }
+        }
+
+        let mut elements = Vec::new();
+        for (_, rect, text) in found {
+            if text.is_empty() {
                 continue;
-            };
+            }
 
             let center = rect.center();
             let (x, y) = capture.to_desktop(center.x / scale as i32, center.y / scale as i32);
@@ -255,13 +314,54 @@ impl Engine {
         crate::index::number(&mut elements);
         Ok(elements)
     }
+
+    /// Tesseract's reading of each line in `language`, cached by pixels.
+    fn reread_lines(
+        &self,
+        pixels: &image::RgbaImage,
+        keys: &[u64],
+        rects: &[Rect],
+        language: &Language,
+        pending: Option<tesseract::Pending>,
+    ) -> Result<Vec<String>> {
+        let mut hasher = DefaultHasher::new();
+        language.codes.hash(&mut hasher);
+        let tag = hasher.finish();
+        let poisoned = || anyhow!("reread cache lock poisoned");
+
+        let mut texts: Vec<Option<String>> = {
+            let cache = self.reread.lock().map_err(|_| poisoned())?;
+            keys.iter()
+                .map(|key| cache.get(&(key ^ tag)).cloned())
+                .collect()
+        };
+        let missing: Vec<usize> = (0..texts.len()).filter(|&i| texts[i].is_none()).collect();
+        let wanted: Vec<Rect> = missing.iter().map(|&i| rects[i]).collect();
+        let fresh = match pending {
+            Some(pending) => pending.read_lines(pixels, &wanted)?,
+            None => tesseract::read_lines(pixels, &wanted, &language.codes)?,
+        };
+
+        let mut cache = self.reread.lock().map_err(|_| poisoned())?;
+        if cache.len() + fresh.len() > LINE_CACHE_SIZE {
+            cache.clear();
+        }
+        for (&i, text) in missing.iter().zip(fresh) {
+            cache.insert(keys[i] ^ tag, text.clone());
+            texts[i] = Some(text);
+        }
+        Ok(texts.into_iter().map(Option::unwrap_or_default).collect())
+    }
 }
 
 /// Maximum word gap relative to text height, tuned on the dense fixture.
 const WORD_GAP_RATIO: f32 = 0.8;
-/// Fragments whose heights or vertical centres differ by more than this fraction
+/// Fragments whose tops and baselines both differ by more than this fraction
 /// of the taller one belong to different controls, however close they sit.
 const CONTROL_SHAPE_TOLERANCE: f32 = 0.3;
+/// A fragment less than this fraction of its neighbour's height is a
+/// different control, such as body text beside a heading.
+const MIN_HEIGHT_RATIO: f32 = 0.55;
 
 // ponytail: spacing heuristic; use accessibility boundaries when widely spaced labels need grouping.
 fn separate_controls(lines: &[Vec<RotatedRect>], edges: &[f32]) -> Vec<Vec<RotatedRect>> {
@@ -275,12 +375,20 @@ fn separate_controls(lines: &[Vec<RotatedRect>], edges: &[f32]) -> Vec<Vec<Rotat
                     .iter()
                     .any(|edge| *edge > a.right() && *edge < b.left())
                     && b.left() - a.right() <= WORD_GAP_RATIO * tallest
-                    && (left.height() - right.height()).abs() <= CONTROL_SHAPE_TOLERANCE * tallest
-                    && (a.center().y - b.center().y).abs() <= CONTROL_SHAPE_TOLERANCE * tallest
+                    && same_line(a, b, tallest)
             })
             .map(<[RotatedRect]>::to_vec)
         })
         .collect()
+}
+
+/// Words of one label share their top (capitals, ascenders) or their
+/// baseline, even when one has descenders or only small letters.
+fn same_line(a: Rect<f32>, b: Rect<f32>, tallest: f32) -> bool {
+    let tolerance = CONTROL_SHAPE_TOLERANCE * tallest;
+    let aligned =
+        (a.top() - b.top()).abs() <= tolerance || (a.bottom() - b.bottom()).abs() <= tolerance;
+    aligned && a.height().min(b.height()) >= MIN_HEIGHT_RATIO * tallest
 }
 
 /// Key a line by its pixels, independent of position.

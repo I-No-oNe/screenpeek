@@ -3,7 +3,8 @@
 set -euo pipefail
 
 models="${XDG_CACHE_HOME:-$HOME/.cache}/screenpeek"
-tessdata="${TESSDATA_PREFIX:-$HOME/.local/share/tessdata}"
+tessdata="${TESSDATA_PREFIX:-${XDG_DATA_HOME:-$HOME/.local/share}/tessdata}"
+config="${XDG_CONFIG_HOME:-$HOME/.config}/screenpeek/languages"
 ocrs_url="https://ocrs-models.s3-accelerate.amazonaws.com"
 tess_url="https://github.com/tesseract-ocr/tessdata_fast/raw/main"
 # Offered at the prompt, and what --all installs. Tesseract has around a
@@ -28,7 +29,8 @@ describe() {
 choose_languages() {
   local reply picked=() i=1
   echo "screenpeek reads English on its own." >&2
-  echo "Additional languages need Tesseract data. Pick any, or none:" >&2
+  echo "Pick extra languages to read (Hebrew, Arabic, Chinese...), or none." >&2
+  echo "They are only used when such text is on screen, so English stays fast." >&2
   echo >&2
   for lang in $all_langs; do
     local mark="  "
@@ -75,9 +77,15 @@ case "${1-}" in
      if [ -t 0 ] && [ -t 2 ]; then
        echo
        read -ra langs <<<"$(choose_languages)"
+       asked=1
      fi ;;
 esac
-[ ${#langs[@]} -eq 0 ] && { echo "built-in models ready in $models"; exit 0; }
+if [ ${#langs[@]} -eq 0 ]; then
+  # Forget an earlier choice only when someone chose none just now.
+  if [ "${1-}" = "--none" ] || [ -n "${asked-}" ]; then rm -f "$config"; fi
+  echo "built-in models ready in $models"
+  exit 0
+fi
 
 mkdir -p "$tessdata"
 for lang in "${langs[@]}"; do
@@ -87,6 +95,12 @@ done
 
 [ -e "$tessdata/eng.traineddata" ] || fetch "$tess_url/eng.traineddata" "$tessdata/eng.traineddata"
 
+mkdir -p "$(dirname "$config")"
+printf '%s\n' "${langs[*]}" > "$config"
+
 echo
-echo "language data in $tessdata"
-echo "add to your shell profile:  export TESSDATA_PREFIX=\"$tessdata\""
+echo "screenpeek will read: English ${langs[*]}"
+command -v tesseract >/dev/null 2>&1 || echo "install tesseract with your package manager to use them (e.g. sudo dnf install tesseract)"
+if [ -n "${TESSDATA_PREFIX:-}" ] || [ "$tessdata" != "${XDG_DATA_HOME:-$HOME/.local/share}/tessdata" ]; then
+  echo "language data in $tessdata"
+fi

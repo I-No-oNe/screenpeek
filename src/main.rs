@@ -364,10 +364,8 @@ fn main() -> Result<()> {
                 .with_context(|| format!("cannot open {}", path.display()))?
                 .into_rgba8();
             let capture = capture::Capture::from_image(image);
-            let elements = match resolve_language(lang.as_deref())? {
-                Some(language) => read::tesseract::read_scaled(&capture, &language, scale)?,
-                None => read::Engine::load()?.read_scaled(&capture, scale)?,
-            };
+            let language = resolve_language(lang.as_deref())?;
+            let elements = read::Engine::load()?.read_scaled(&capture, scale, language.as_ref())?;
             print(&elements.iter().collect::<Vec<_>>(), json)?;
         }
 
@@ -542,12 +540,11 @@ fn scan(area: &Area) -> Result<Vec<Element>> {
                     let recognized = (|| {
                         let mut capture = capture::screen(area.monitor, region)?;
                         capture.exclude(&excluded);
-                        match &language {
-                            Some(language) => read::tesseract::read(&capture, language),
-                            None => {
-                                read::Engine::load()?.read_within(&capture, &read::edges(&windows))
-                            }
-                        }
+                        read::Engine::load()?.read_within(
+                            &capture,
+                            &read::edges(&windows),
+                            language.as_ref(),
+                        )
                     })();
                     (tree.join().unwrap_or_default(), recognized)
                 });
@@ -586,57 +583,25 @@ fn resolve(target: &str, fresh: bool, area: &Area) -> Result<Snapshot> {
     Ok(Snapshot::new(scan(area)?))
 }
 
-/// Validate languages and use locale or accessible text for auto-selection.
-fn resolve_language(requested: Option<&str>) -> Result<Option<String>> {
-    let Some(requested) = requested else {
-        return Ok(None);
-    };
-
-    let installed = read::tesseract::installed()?;
-
-    // Include English for mixed-language labels when its model is installed.
-    if requested == "all" {
-        return Ok(Some(read::language::every(&installed)));
-    }
-    if requested != "auto" {
-        read::tesseract::supports(requested)?;
-        return Ok(Some(read::language::with_english(requested, &installed)));
-    }
-
-    Ok(read::language::detect(&known_text(), &installed))
-}
-
-/// Accessible text, which is what `--lang auto` guesses from.
-#[cfg(target_os = "linux")]
-fn known_text() -> Vec<Element> {
-    let Ok(windows) = read::atspi::windows() else {
-        return Vec::new();
-    };
-    windows
-        .iter()
-        .flat_map(|window| window.items.iter())
-        .map(|item| Element {
-            id: 0,
-            text: item.text.clone(),
-            x: item.x,
-            y: item.y,
-            width: item.width,
-            height: item.height,
-            source: index::Source::Tree,
-            role: item.role.map(String::from),
-            states: item.states.iter().map(|state| state.to_string()).collect(),
-        })
-        .collect()
-}
-
-#[cfg(windows)]
-fn known_text() -> Vec<Element> {
-    read::ui::elements().unwrap_or_default()
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn known_text() -> Vec<Element> {
-    Vec::new()
+/// The languages to read besides the built-in reader: the ones asked for,
+/// or the ones chosen at install time, re-read only when needed.
+fn resolve_language(requested: Option<&str>) -> Result<Option<read::Language>> {
+    use read::language::{configured, every, with_english};
+    let auto = |codes| Some(read::Language { codes, auto: true });
+    let explicit = |codes| Some(read::Language { codes, auto: false });
+    Ok(match requested {
+        None => configured().and_then(auto),
+        Some("none") => None,
+        Some("auto") => match configured() {
+            Some(codes) => auto(codes),
+            None => auto(every(&read::tesseract::installed()?)),
+        },
+        Some("all") => explicit(every(&read::tesseract::installed()?)),
+        Some(code) => {
+            read::tesseract::supports(code)?;
+            explicit(with_english(code, &read::tesseract::installed()?))
+        }
+    })
 }
 
 #[cfg(target_os = "linux")]

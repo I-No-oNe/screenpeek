@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::capture::{self, Capture, Region};
 use crate::index::{self, Element};
-use crate::read::{Engine, Placement};
+use crate::read::{Engine, Language, Placement};
 
 mod diff;
 use diff::{dirty_areas, merge_bands, worth_patching};
@@ -48,7 +48,7 @@ pub struct Request {
     #[serde(default)]
     pub session: u32,
     #[serde(default)]
-    pub lang: Option<String>,
+    pub lang: Option<Language>,
     #[serde(default)]
     pub excluded: Vec<Region>,
 }
@@ -214,7 +214,7 @@ struct Frame {
     image: RgbaImage,
     pixels: Vec<Element>,
     elements: Vec<Element>,
-    lang: Option<String>,
+    lang: Option<Language>,
 }
 
 /// Minimum OCR text coverage required to trust a window’s accessibility tree.
@@ -330,7 +330,7 @@ impl Session {
         let edges = crate::read::edges(&placements);
         let recognition = Instant::now();
 
-        let overlap = request.lang.is_none() && !comparable;
+        let overlap = !comparable;
         let (located, read_ahead) = if overlap {
             let mut tree = std::mem::take(&mut self.tree);
             let (covered, engine) = (&self.covered, &self.engine);
@@ -338,7 +338,7 @@ impl Session {
                 let walker = scope.spawn(|| {
                     located_windows(&mut tree, covered, &placements, &changed, capture.origin)
                 });
-                let pixels = engine.read_within(&capture, &edges);
+                let pixels = engine.read_within(&capture, &edges, request.lang.as_ref());
                 (pixels, walker.join().unwrap_or_default())
             });
             self.tree = tree;
@@ -357,7 +357,7 @@ impl Session {
         };
 
         // Patch Tesseract reads too, since its cost scales with image area.
-        let language = request.lang.as_deref();
+        let language = request.lang.as_ref();
         let (pixels, what) = if let Some(pixels) = read_ahead {
             (pixels, "full")
         } else {
@@ -566,12 +566,9 @@ impl Session {
         &self,
         capture: &Capture,
         edges: &[i32],
-        language: Option<&str>,
+        language: Option<&Language>,
     ) -> Result<Vec<Element>> {
-        match language {
-            Some(language) => crate::read::tesseract::read(capture, language),
-            None => self.engine.read_within(capture, edges),
-        }
+        self.engine.read_within(capture, edges, language)
     }
 
     /// Re-read changed bands in parallel, skipping bands already cached.
@@ -581,7 +578,7 @@ impl Session {
         capture: &Capture,
         bands: &[Region],
         edges: &[i32],
-        language: Option<&str>,
+        language: Option<&Language>,
     ) -> Result<Vec<Element>> {
         let crops: Vec<(u64, Capture)> = bands
             .iter()
@@ -649,10 +646,12 @@ fn offsets_from(elements: &[Element], origin: (i32, i32)) -> Vec<Element> {
 }
 
 /// Key band text by pixels and language.
-fn band_key(image: &RgbaImage, language: Option<&str>) -> u64 {
+fn band_key(image: &RgbaImage, language: Option<&Language>) -> u64 {
     let mut hasher = DefaultHasher::new();
     hash_image(image).hash(&mut hasher);
-    language.hash(&mut hasher);
+    language
+        .map(|language| (&language.codes, language.auto))
+        .hash(&mut hasher);
     hasher.finish()
 }
 
@@ -675,7 +674,7 @@ fn context_key(monitor: Option<usize>, origin: (i32, i32), excluded: &[Region]) 
 pub fn ask(
     region: Option<Region>,
     monitor: Option<usize>,
-    lang: Option<String>,
+    lang: Option<Language>,
     excluded: Vec<Region>,
 ) -> Option<Vec<Element>> {
     if std::env::var_os("SCREENPEEK_NO_DAEMON").is_some() {
@@ -768,7 +767,7 @@ fn endpoint_path() -> Result<PathBuf> {
     Ok(dirs::cache_dir()
         .ok_or_else(|| anyhow!("no cache directory on this system"))?
         .join("screenpeek")
-        .join("daemon-v2"))
+        .join("daemon-v3"))
 }
 
 fn write_endpoint(port: u16, token: &str) -> Result<()> {

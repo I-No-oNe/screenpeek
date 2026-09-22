@@ -30,3 +30,14 @@ mkdir -p "$prefix"
 install -m 755 "$tmp/screenpeek" "$prefix/screenpeek"
 echo "installed $tag to $prefix/screenpeek"
 "$prefix/screenpeek" --version
+
+# Offer extra languages when someone is at the terminal to answer.
+if [ -t 0 ] && [ -t 1 ]; then
+  here=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || echo .)
+  if [ -f "$here/scripts/fetch-models.sh" ]; then
+    bash "$here/scripts/fetch-models.sh"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/$repo/main/scripts/fetch-models.sh" -o "$tmp/fetch-models.sh"
+    bash "$tmp/fetch-models.sh"
+  fi
+fi
