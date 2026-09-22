@@ -7,6 +7,13 @@ trying next.
 The daemon starts itself the first time a command needs it, so the fast path is
 the default. `SCREENPEEK_NO_DAEMON=1` keeps everything in one process.
 
+It is meant to be invisible while it is not working: recognition runs on half
+the cores, bands are read in parallel within that budget, and a band whose
+pixels have been read before is not read again, so a repeat look at an
+unchanged screen costs 12 ms. It shuts itself down 10 minutes after the last
+request, or a minute after the last session that used it has exited, whichever
+comes first.
+
 ## Where a scan spends its time
 
 | Stage | Cost |
@@ -17,7 +24,8 @@ the default. `SCREENPEEK_NO_DAEMON=1` keeps everything in one process.
 | Accessibility tree walk, nothing exposed | 3 ms |
 | Recognition, 900x560 dialog, 20 labels | 336 ms |
 | Recognition, 1920x1080 text-dense screen | 1,700–3,000 ms |
-| Recognition, changed bands only | 320–430 ms |
+| Recognition, changed bands only | 320-430 ms |
+| Repeat look, nothing changed | 12-16 ms |
 
 Recognition is now the whole cost. It scales with how much text is on screen,
 not with area: half the screen took 1,679 ms against 1,739 ms for all of it,
@@ -35,6 +43,12 @@ artefacts.
 slower. rten dispatches SIMD at runtime and pinning the target defeats it.
 Build it stock.
 
+## Done since
+
+**Bands read in parallel, and cached by their pixels.** A screen that flips
+between two states, a menu opening and closing, is read once. An unchanged
+screen costs 12 ms end to end.
+
 ## Worth trying next, most promising first
 
 **Skip recognition for windows the tree already covers.** A window whose
@@ -49,14 +63,10 @@ Asking the compositor which one has focus and reading that rectangle would cut
 the work to the text in it. The numbers above suggest most of a saving comes
 from excluding text-dense background windows, which is exactly what this does.
 
-**Recognize bands in parallel.** Patched reads already split the screen into
-independent bands. rten threads within one recognition pass, so the gain is
-whatever is left idle between passes, which is worth measuring before building.
-
-**Cache recognition per line.** Hash each detected line's pixels and keep the
-text. A window that scrolls by one line currently re-reads every line in the
-band; with a cache it would read one. This helps terminals and lists, which is
-where the current worst case lives.
+**Cache recognition per line.** Bands are cached whole; a band that scrolls by
+one line misses the cache entirely. Hashing each detected line instead would
+turn that into a single line's work, which is where the current worst case
+lives.
 
 **A different recognition engine.** PaddleOCR's mobile models through ONNX
 Runtime are typically several times faster than ocrs on CPU, and they are

@@ -71,7 +71,7 @@ screenpeek read   <image> [--scale N] [--json]
 
 A scan is cached, and `click` scans again by itself when the cached one cannot answer, so acting on a screen is usually one command. `--fresh` forces a new scan when the text is unchanged but has moved.
 
-`serve` runs the daemon in the foreground. It is rarely needed by hand: the first command that would benefit starts one in the background by itself, and every command after that uses it. `status` says whether one is up, and `SCREENPEEK_NO_DAEMON=1` keeps everything in a single process.
+`serve` runs the daemon in the foreground. It is rarely needed by hand: the first command that would benefit starts one in the background by itself, and every command after that uses it. `status` says whether one is up, and `SCREENPEEK_NO_DAEMON=1` keeps everything in a single process. The daemon uses half the cores, and stops on its own once it has been idle for ten minutes or once the session that was using it has exited.
 
 `run` takes a whole interaction in one command and scans only when a step needs something it does not already know:
 
@@ -94,6 +94,7 @@ Measured on 1920x1080, Hyprland, CPU only. Full method and numbers in [BENCHMARK
 | Capture | 9 ms | 529 ms |
 | One look, no daemon | 2,617 ms | 529 ms |
 | One look, daemon, changed rows only | ~400 ms | 529 ms |
+| Repeat look, nothing changed | 12 ms | 529 ms |
 
 Where the time goes, what has been tried and what is worth trying next is in [PERFORMANCE.md](PERFORMANCE.md).
 
