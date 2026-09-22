@@ -279,6 +279,10 @@ impl Pointer {
             }
             return Ok(());
         }
+        // Windows and X11 take Unicode text directly.
+        if !cfg!(target_os = "linux") || std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            return self.enigo()?.text(text).context("cannot type text");
+        }
         for character in text.chars() {
             if self.enigo.is_none() || !plain(character) {
                 self.enigo = Some(new_enigo()?);

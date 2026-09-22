@@ -59,7 +59,9 @@ impl Placement {
 pub fn placements() -> Vec<Placement> {
     #[cfg(target_os = "linux")]
     return geometry::windows().unwrap_or_default();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    return ui::windows().unwrap_or_default();
+    #[cfg(not(any(target_os = "linux", windows)))]
     Vec::new()
 }
 

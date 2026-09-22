@@ -528,7 +528,17 @@ fn focus_window(window: &read::Placement) -> Result<()> {
     read::geometry::focus(window)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+fn focus_window(window: &read::Placement) -> Result<()> {
+    read::ui::focus(
+        window
+            .handle
+            .as_deref()
+            .context("the window has no handle")?,
+    )
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 fn focus_window(_window: &read::Placement) -> Result<()> {
     anyhow::bail!("focusing windows is not supported on this platform yet")
 }
@@ -613,7 +623,7 @@ fn scan(area: &Area) -> Result<Vec<Element>> {
     let region = area.region(&windows)?;
     let language = resolve_language(area.lang.as_deref())?;
     let excluded = caller::regions(&windows);
-    let mut elements = match controls(area) {
+    let mut elements = match controls(region) {
         Some(elements) => elements,
         None => match daemon::ask(region, area.monitor, language.clone(), excluded.clone()) {
             Some(elements) => elements,
@@ -731,7 +741,7 @@ fn with_tree_text(
 }
 
 #[cfg(windows)]
-fn controls(area: &Area) -> Option<Vec<Element>> {
+fn controls(region: Option<Region>) -> Option<Vec<Element>> {
     let elements = match read::ui::elements() {
         Ok(elements) if !elements.is_empty() => elements,
         Ok(_) => return None,
@@ -740,7 +750,7 @@ fn controls(area: &Area) -> Option<Vec<Element>> {
             return None;
         }
     };
-    Some(match area.region {
+    Some(match region {
         Some(region) => elements
             .into_iter()
             .filter(|element| region.contains(element.x, element.y))
@@ -750,7 +760,7 @@ fn controls(area: &Area) -> Option<Vec<Element>> {
 }
 
 #[cfg(not(windows))]
-fn controls(_area: &Area) -> Option<Vec<Element>> {
+fn controls(_region: Option<Region>) -> Option<Vec<Element>> {
     None
 }
 
