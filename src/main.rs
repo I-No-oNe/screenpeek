@@ -530,13 +530,22 @@ fn scan(area: &Area) -> Result<Vec<Element>> {
         None => match daemon::ask(region, area.monitor, language.clone(), excluded.clone()) {
             Some(elements) => elements,
             None => {
-                let mut capture = capture::screen(area.monitor, region)?;
-                capture.exclude(&excluded);
-                let recognized = match &language {
-                    Some(language) => read::tesseract::read(&capture, language)?,
-                    None => read::Engine::load()?.read_within(&capture, &read::edges(&windows))?,
-                };
-                with_tree_text(recognized, &windows)
+                // The tree walk overlaps capture and recognition.
+                let (tree, recognized) = std::thread::scope(|scope| {
+                    let tree = scope.spawn(tree);
+                    let recognized = (|| {
+                        let mut capture = capture::screen(area.monitor, region)?;
+                        capture.exclude(&excluded);
+                        match &language {
+                            Some(language) => read::tesseract::read(&capture, language),
+                            None => {
+                                read::Engine::load()?.read_within(&capture, &read::edges(&windows))
+                            }
+                        }
+                    })();
+                    (tree.join().unwrap_or_default(), recognized)
+                });
+                with_tree_text(recognized?, tree, &windows)
             }
         },
     };
@@ -624,17 +633,33 @@ fn known_text() -> Vec<Element> {
     Vec::new()
 }
 
+#[cfg(target_os = "linux")]
+type Tree = Vec<read::atspi::Window>;
+#[cfg(not(target_os = "linux"))]
+type Tree = ();
+
+#[cfg(target_os = "linux")]
+fn tree() -> Tree {
+    read::atspi::windows().unwrap_or_default()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn tree() -> Tree {}
+
 /// Place tree labels using compositor geometry or matching OCR text.
 #[cfg(target_os = "linux")]
-fn with_tree_text(elements: Vec<Element>, placements: &[read::Placement]) -> Vec<Element> {
-    let windows = match read::atspi::windows() {
-        Ok(windows) if !windows.is_empty() => windows,
-        _ => return elements,
-    };
-    if placements.is_empty() {
-        return read::fuse::fuse(elements, &windows);
+fn with_tree_text(
+    elements: Vec<Element>,
+    tree: Tree,
+    placements: &[read::Placement],
+) -> Vec<Element> {
+    if tree.is_empty() {
+        return elements;
     }
-    let located = read::fuse::place(&windows, placements)
+    if placements.is_empty() {
+        return read::fuse::fuse(elements, &tree);
+    }
+    let located = read::fuse::place(&tree, placements)
         .into_iter()
         .flat_map(|window| window.elements)
         .collect();
@@ -642,7 +667,11 @@ fn with_tree_text(elements: Vec<Element>, placements: &[read::Placement]) -> Vec
 }
 
 #[cfg(not(target_os = "linux"))]
-fn with_tree_text(elements: Vec<Element>, _placements: &[read::Placement]) -> Vec<Element> {
+fn with_tree_text(
+    elements: Vec<Element>,
+    _tree: Tree,
+    _placements: &[read::Placement],
+) -> Vec<Element> {
     elements
 }
 
