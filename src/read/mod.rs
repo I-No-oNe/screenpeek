@@ -10,6 +10,8 @@ pub mod atspi;
 pub mod fuse;
 #[cfg(target_os = "linux")]
 pub mod geometry;
+pub mod language;
+pub mod tesseract;
 #[cfg(windows)]
 pub mod ui;
 
@@ -73,18 +75,22 @@ impl Engine {
 
     pub fn read_scaled(&self, capture: &Capture, scale: u32) -> Result<Vec<Element>> {
         let scale = scale.max(1);
-        let rgb = image::DynamicImage::ImageRgba8(capture.image.clone()).into_rgb8();
-        let rgb = if scale == 1 {
-            rgb
+        // ocrs takes RGBA as it comes, so the common path hands it the capture
+        // without copying or converting anything.
+        let scaled;
+        let pixels = if scale == 1 {
+            &capture.image
         } else {
-            image::imageops::resize(
-                &rgb,
-                rgb.width() * scale,
-                rgb.height() * scale,
+            scaled = image::imageops::resize(
+                &capture.image,
+                capture.image.width() * scale,
+                capture.image.height() * scale,
                 image::imageops::FilterType::Lanczos3,
-            )
+            );
+            &scaled
         };
-        let source = ImageSource::from_bytes(rgb.as_raw(), rgb.dimensions())
+
+        let source = ImageSource::from_bytes(pixels.as_raw(), pixels.dimensions())
             .map_err(|err| anyhow!("cannot read the captured image: {err}"))?;
         let input = self
             .inner
@@ -97,7 +103,7 @@ impl Engine {
             .map_err(|err| anyhow!("text detection failed: {err}"))?;
         let lines = self.inner.find_text_lines(&input, &words);
 
-        let keys: Vec<(u64, Rect)> = lines.iter().map(|line| line_key(&rgb, line)).collect();
+        let keys: Vec<(u64, Rect)> = lines.iter().map(|line| line_key(pixels, line)).collect();
         let unread: Vec<Vec<RotatedRect>> = lines
             .iter()
             .zip(&keys)
@@ -170,7 +176,7 @@ impl Engine {
 
 /// A line is identified by the pixels under it, so the same line matches
 /// wherever it has moved to.
-fn line_key(image: &image::RgbImage, line: &[RotatedRect]) -> (u64, Rect) {
+fn line_key(image: &image::RgbaImage, line: &[RotatedRect]) -> (u64, Rect) {
     let rect = bounding_rect(line.iter())
         .map(|rect| {
             Rect::from_tlbr(
