@@ -1,95 +1,79 @@
 # screenpeek
 
-**Read desktop controls as text. Click them by name.**
+**See desktop apps as text. Click things by name.**
 
 ```sh
-screenpeek scan --grep "Save"
-# 7 Save @412,318
-screenpeek click "Save" --fresh
-screenpeek fill "Search" "hello world" --fresh
+$ screenpeek scan --grep Save
+7 Save @412,318
+$ screenpeek click Save
+7 Save @412,318
 ```
 
-Screenpeek gives agents and scripts a text interface to any desktop app. It
-merges local OCR, accessibility labels and compositor window positions into a
-numbered list of `id text @x,y`, then clicks by name or ID.
+screenpeek lets AI agents and scripts drive any desktop app without
+screenshots. It reads what is on screen (with local OCR and the app's own
+accessibility labels) and gives back short lines of text. Then it clicks,
+types, scrolls and switches windows for you.
 
-## Why screenpeek
+It is built for **navigating and testing workflows quickly**. For questions
+about how something *looks* (layout, colours, images), keep using screenshots.
 
-**vs. vanilla computer use** (screenshot → vision model → guessed coordinates):
+## Why use it
 
-- **Tiny observations.** `scan --grep Save` returns ~7 tokens; a screenshot of
-  the same dialog costs ~765. A full dialog listing is ~156.
-- **Fast and local.** A warm scan takes tens to a few hundred ms on the CPU. No
-  model round trip per step, no API key, no screenshots leave the machine.
-- **Exact targets.** Clicks land on the centre of a named element. Ambiguous
-  names fail with a list of candidates instead of clicking the wrong one.
-- **Built for agent loops.** `wait` polls for a label instead of guessing
-  sleeps, IDs stay stable across scans, and roles and states (`[checked]`,
-  `[disabled]`) come from the accessibility tree. Also `scroll`, `drag` and an
-  MCP server.
+- **Much faster.** A step takes about 0.1 s locally instead of a
+  screenshot plus a round trip to a vision model.
+- **Much cheaper.** `Save @412,318` is 7 tokens; a screenshot is around 1,000.
+- **Works for any model.** Text-only models get "computer use" too.
+- **Clicks the right thing.** It clicks the exact centre of a named element,
+  and refuses to guess when a name matches several things.
+- **Private.** Nothing leaves your machine; no API keys.
 
-**vs. other tools:**
+Compared with other tools: xdotool and ydotool need coordinates you don't
+have; dogtail and pyatspi only see apps with accessibility support; image
+matching breaks when the theme changes. screenpeek combines all three sources.
 
-| Tool | Gap screenpeek fills |
-| --- | --- |
-| xdotool / ydotool | Need coordinates; screenpeek finds them by label |
-| dogtail / pyatspi | Tree only: miss apps with no accessibility (Chromium, many Electron apps) and report window-relative positions on Wayland |
-| pyautogui / template matching | Break on themes, scaling and font changes |
-| Cloud OCR / vision APIs | Upload your screen and add network latency |
+## Get started
 
-Use screenshots for visual judgment, canvases and unlabelled icons. Use the DOM
-or an app API when one is available.
-
-## Install
+**1. Install**
 
 ```sh
 git clone https://github.com/I-No-oNe/screenpeek.git
 cd screenpeek
-sh install.sh                     # latest release into ~/.local/bin
-# or build it: cargo install --path . --locked
+sh install.sh
 ```
 
-OCR models download on first use. For other languages, see
-[languages](docs/languages.md).
+The installer asks which extra languages to read (Hebrew, Arabic, Chinese...).
+Press Enter for none; you can change it later.
 
-## Replace computer use in your agent
+**2. Connect your agent**
 
 ```sh
-sh scripts/install-skills.sh          # Codex and/or Claude Code, whichever is installed
-sh scripts/install-skills.sh --link   # symlink, so `git pull` updates the skill
+sh scripts/install-skills.sh                  # Claude Code and/or Codex
+claude mcp add screenpeek -- screenpeek mcp   # or use it as an MCP server
 ```
 
-The `screenpeek` skill tells the agent to reach for screenpeek before taking a
-screenshot: scan for the label, click or fill it by name, then verify with
-another scan. Screenshots stay the fallback for visual questions. Start a new
-agent session afterwards; it must run inside the logged-in desktop session.
+**3. Ask your agent to use it**, for example: *"Open Settings with screenpeek
+and turn on dark mode."*
 
-Agents without skills can use the MCP server instead:
+## What it can do
 
-```sh
-claude mcp add screenpeek -- screenpeek mcp
-codex mcp add screenpeek -- screenpeek mcp
-```
-
-To make it explicit, add to your `AGENTS.md` or `CLAUDE.md`:
-
-> For desktop apps, use `screenpeek` (scan, click, fill, key, run) instead of
-> screenshots or computer use. Only take a screenshot when the answer depends
-> on how something looks.
-
-## Platforms
-
-| Desktop | Capture and input |
+| You want to | Command |
 | --- | --- |
-| Hyprland, Sway | Native Wayland protocols |
-| GNOME, KDE Plasma (Wayland) | Screenshot and RemoteDesktop portals, asked once |
-| X11 (any window manager) | X11 |
-| Windows | UI Automation, OCR fallback |
+| See what is on screen | `screenpeek scan --focused` |
+| Find one thing | `screenpeek scan --grep Save` |
+| Click it | `screenpeek click Save` |
+| Type into a field | `screenpeek fill Search "cats"` |
+| Press keys | `screenpeek key ctrl+s` |
+| Wait for something | `screenpeek wait Saved` |
+| Scroll or drag | `screenpeek scroll down 5` · `screenpeek drag A B` |
+| Switch windows | `screenpeek windows` · `screenpeek focus Firefox` |
+| Run several steps | `screenpeek run "click File" "click Save" "wait Saved"` |
 
-GNOME needs a small extension for window positions; KDE needs nothing.
-See [setup](docs/usage.md#gnome-and-kde).
+Full guide: [docs/usage.md](docs/usage.md).
 
-OCR can misread labels and cached positions go stale: use `--fresh` after the
-layout changes and check each action's result.
+## Works on
 
-[Usage](docs/usage.md) · [Measurements](docs/performance.md) · [MIT](LICENSE)
+Linux (Hyprland, Sway, GNOME, KDE Plasma, any X11 desktop) and Windows.
+GNOME needs a small extension for window positions; see the guide.
+
+[Guide](docs/usage.md) · [Languages](docs/languages.md) ·
+[Speed and accuracy](docs/performance.md) · [MIT license](LICENSE)

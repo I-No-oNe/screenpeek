@@ -1,45 +1,42 @@
-# Measurements
+# Speed and accuracy
 
-Local runs on an 8-thread Linux CPU, Hyprland at 1920×1080, release build,
-models already downloaded. Treat them as indications, not guarantees.
+Measured on one Linux laptop (8 threads, Hyprland, 1920×1080), release build.
+Your numbers will differ; the commands below reproduce them.
 
-## Observation size
+## Tokens per look
 
-Tokens counted with `o200k_base`; image cost uses OpenAI's high-detail formula.
-
-| Observation | Tokens |
+| What the agent sees | Tokens |
 | --- | ---: |
-| 900×560 dialog screenshot | ~765 |
+| Screenshot of a 900×560 dialog | about 765 |
 | Full text listing of that dialog | 156 |
 | `scan --grep Save` | 7 |
 
-## Latency
+## Time per step
 
 | Step | Time |
 | --- | --- |
-| Native capture, full output / 400×300 region | ~60 ms / ~8 ms |
-| Portal capture (GNOME/KDE) | 430–930 ms |
-| Warm full-desktop OCR | ~200–240 ms |
-| Unchanged frame (daemon cache) | 0 ms after capture |
-| Hebrew changed band vs full frame | ~290 ms vs ~1,100 ms |
-| First daemon read (model warm-up) | ~870 ms |
-| Accessibility tree, Nautilus window | ~65 ms |
-| Typing 700 plain characters (Wayland) | ~55 ms |
+| Scan with the background helper running | ~80 ms |
+| Scan of a screen that did not change | a few ms after capture |
+| Accessibility tree of a file manager window | ~65 ms |
+| Typing 700 ordinary characters (Wayland) | ~55 ms |
+| First scan (starts the helper, loads models) | ~1 s |
+| GNOME / KDE screen capture (portal) | 0.4–0.9 s |
 
-In one side-by-side run against dogtail on the same GTK window, screenpeek
-returned 63 uniquely clickable names in 70 ms against dogtail's 38 in 568 ms.
-dogtail's coordinates were window-relative on Wayland.
+With an extra language chosen, a scan of a changing Hebrew screen took
+~220 ms, down from ~650 ms with the previous full-screen method.
+
+## Accuracy
+
+On the test dialog, 19 of 20 labels are read exactly; on the dense toolbar,
+8 of 8. See [languages](languages.md) for other scripts.
 
 ## Reproduce
 
 ```sh
-cargo test --locked
 cargo build --release --locked
-python3 bench/measure.py --all            # accuracy and CLI latency
-python3 bench/compare_tools.py --runs 7   # built-in OCR vs Tesseract
+python3 bench/measure.py --all                   # accuracy and time per image
+python3 bench/compare_tools.py --runs 7          # built-in reader vs Tesseract
 uv run --with tiktoken python bench/compare.py   # token counts
-python3 bench/tasks.py bench/tasks.example.json # scripted tasks vs screenshot tokens
+python3 bench/tasks.py bench/tasks.example.json  # scripted tasks vs screenshots
 cargo test --release --bin screenpeek -- --ignored --nocapture --test-threads=1
 ```
-
-Ignored tests need the OCR models.
