@@ -1,8 +1,4 @@
-//! Capture on X11, holding one connection open.
-//!
-//! X11 hands over raw pixels for any drawable, so a screenshot is one request
-//! against the root window. The connection and the monitor list are kept
-//! between frames, the same way the Wayland path keeps its buffer.
+//! Reuse an X11 connection to capture root-window pixels.
 
 use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
@@ -90,7 +86,7 @@ fn to_rgba(data: &[u8], width: u32, height: u32) -> Result<RgbaImage> {
     }
 
     let mut pixels = Vec::with_capacity(expected);
-    for pixel in data[..expected].chunks_exact(4) {
+    for pixel in data[..expected].as_chunks::<4>().0 {
         pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
     }
 

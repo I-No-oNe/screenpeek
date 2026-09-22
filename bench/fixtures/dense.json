@@ -1,0 +1,62 @@
+{
+  "image": "dense.png",
+  "language": null,
+  "targets": [
+    {
+      "label": "FILE",
+      "x": 20,
+      "y": 24,
+      "width": 42,
+      "height": 22
+    },
+    {
+      "label": "EDIT",
+      "x": 64,
+      "y": 24,
+      "width": 50,
+      "height": 22
+    },
+    {
+      "label": "INPUT",
+      "x": 20,
+      "y": 64,
+      "width": 58,
+      "height": 22
+    },
+    {
+      "label": "OUTPUT",
+      "x": 78,
+      "y": 64,
+      "width": 72,
+      "height": 22
+    },
+    {
+      "label": "Font size",
+      "x": 20,
+      "y": 104,
+      "width": 84,
+      "height": 22
+    },
+    {
+      "label": "13",
+      "x": 108,
+      "y": 104,
+      "width": 40,
+      "height": 22
+    },
+    {
+      "label": "Open file",
+      "x": 20,
+      "y": 144,
+      "width": 110,
+      "height": 22
+    },
+    {
+      "label": "Save copy",
+      "x": 20,
+      "y": 184,
+      "width": 120,
+      "height": 22
+    }
+  ]
+}

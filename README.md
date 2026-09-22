@@ -1,120 +1,94 @@
 # screenpeek
 
-Reads the screen as a numbered list of text and clicks it by name. Built for programs that drive a desktop without seeing one: agents, test harnesses, scripts. A scan is plain text with screen coordinates, so nothing has to send a screenshot anywhere or invent a pixel coordinate.
+**Read desktop controls as text. Click them by name.** `0.0.1-alpha`
 
-```console
-$ screenpeek scan --grep save
-7 Save File @412,318
-
-$ screenpeek click "Save File"
-7 Save File @412,318
-
-$ screenpeek fill "Search" "hello world"
+```sh
+screenpeek scan --grep "Save"
+# 7 Save @412,318
+screenpeek click "Save" --fresh
+screenpeek fill "Search" "hello world" --fresh
 ```
 
-## Install and download
+Screenpeek gives coding agents and scripts a text interface to desktop apps.
+It combines local OCR, accessibility labels and window positions, then returns
+IDs and coordinates. No vision API, API key or screenshot upload is needed.
 
-```bash
+Use it for labelled buttons, menus, fields and accessible icons. Keep screenshots
+for visual judgment, canvas content and icons without accessibility names;
+use a browser DOM or an application API when available.
+
+## Why use it
+
+| Task | What screenpeek changes | Evidence |
+| --- | --- | --- |
+| Find a known label | Return a short text result instead of an image | `Save`: 7 text tokens vs an estimated 765 high-detail image tokens |
+| Re-read a still desktop | Reuse recognized text after capture | About 60–70 ms on the measured Hyprland session |
+| Read a changed multilingual screen | Recognize only the changed region | Hebrew desktop read: 1,083–1,160 ms → 264–323 ms |
+| Work across toolkits | Combine accessible controls with OCR | Read a browser with no exposed AT-SPI tree; name icon-only GTK buttons |
+| Click on Wayland | Add compositor window positions to accessibility coordinates | Corrected the shared-label offset in the dogtail comparison |
+
+These are local measurements, not a universal speed or accuracy ranking.
+The full dialog listing is 156 tokens, so its reduction is about **4.9×**;
+the **109×** figure applies only to the filtered `Save` result.
+[Benchmarks, comparison limits and reproduction commands](docs/performance.md).
+
+## Install
+
+Download a binary from [Releases](https://github.com/I-No-oNe/screenpeek/releases),
+or clone and run the installer:
+
+```sh
+git clone https://github.com/I-No-oNe/screenpeek.git
+cd screenpeek
 sh install.sh
 ```
 
-That drops the latest release binary into `~/.local/bin` (override with `PREFIX`). It uses `gh` when it is installed, which is what makes it work while the repository is private. Prebuilt Linux and Windows binaries are also attached to every tagged release on the [Releases page](https://github.com/I-No-oNe/screenpeek/releases).
+For a source build, use Rust 1.94+ and the [build dependencies](docs/usage.md):
 
-To build it instead, with Rust 1.75 or newer:
-
-```bash
-cargo install --git https://github.com/I-No-oNe/screenpeek
+```sh
+cargo install --path . --locked
 ```
 
-One binary, no runtime dependencies. The OCR models (12 MB) download to the cache directory on first use.
+OCR models download on first use. Additional languages need Tesseract:
 
-Linux builds need `libwayland-dev` and `libxkbcommon-dev` (or your distribution's equivalents) at compile time.
-
-Linux works on Wayland and on X11. On Wayland it uses `wlr-screencopy` for capture and `wlr-virtual-pointer` with `virtual-keyboard` for input, which Hyprland, Sway, river and Wayfire all have; on X11 it reads the root window and drives the pointer through X. Window positions come from Hyprland's IPC, Sway's i3 protocol, or X11's window properties. Anywhere else, the position is worked out from the pixels instead. GNOME, KDE and X11 are not supported on Linux; Windows is.
-
-## Runtime design
-
-```text
-Windows ─── UI Automation ─── exact text + screen rectangles ─── elements
-
-Linux ───┬─ AT-SPI ──────────────── exact text, no position ──┐
-         ├─ Hyprland / Sway / X11 ─ window positions ─────────┼─ joined
-         └─ screencopy or X11 ───── OCR for what is left over ┘
-
-Any platform ─── enigo ─── pointer and keyboard
+```sh
+bash scripts/fetch-models.sh heb jpn
+export TESSDATA_PREFIX="$HOME/.local/share/tessdata"
+screenpeek scan --lang heb
 ```
 
-On Windows the control tree carries both the text and the rectangle, so recognition never runs.
+## Codex and Claude Code
 
-On Linux it carries only the text: Wayland never tells a window where it sits, so a GTK4 window reports its contents from `0,0` wherever it really is. The compositor does know, so screenpeek asks it, Hyprland over its JSON socket and Sway over the i3 protocol, and joins the two on window title and size. Where the compositor cannot be asked, it recognizes the pixels and matches a couple of labels to work the offset out instead. Every control in that window then gets a real position, including ones recognition cannot read at all, such as an icon whose only text is its accessible name, and the text is whatever the toolkit says it is, in any language. Windows with no accessible tree fall back to recognition alone.
+Install the CLI, then install its two skills from this checkout:
 
-A running daemon keeps the models loaded, keeps the last frame, and re-reads only the rows that changed.
-
-## Commands
-
-```
-screenpeek scan   [--grep TEXT] [--region X,Y,W,H] [--monitor N] [--focused] [--lang CODE] [--json]
-screenpeek click  <id|text> [--button left|right|middle] [--double] [--fresh]
-screenpeek type   <text>
-screenpeek key    <combination>
-screenpeek fill   <id|text> <text>
-screenpeek run    <step>...
-screenpeek serve
-screenpeek status
-screenpeek tree
-screenpeek read   <image> [--scale N] [--lang CODE] [--json]
+```sh
+sh scripts/install-skills.sh codex
+# Or: sh scripts/install-skills.sh claude
 ```
 
-`scan` prints `id text @x,y`, where `x,y` is the centre of the text on the virtual desktop, the point a click lands on. `--json` adds each element's size.
+In a new local Codex session, ask `$screenpeek` to read the desktop or
+`$screenpeek-drive` to operate an app. The skills use shell commands; no MCP
+server is required. Codex must run in the logged-in desktop session with access
+to its display and session bus. A cloud agent cannot see your local desktop.
+[Codex skill locations](https://learn.chatgpt.com/docs/build-skills).
 
-`click` takes an id from the last scan or part of an element's text. Exact matches beat prefixes, prefixes beat substrings, so `click Save` picks `Save` over `Save As...`. Several matches is an error that lists them; nothing is clicked on a guess.
+## Platforms
 
-A scan is cached, and `click` scans again by itself when the cached one cannot answer, so acting on a screen is usually one command. `--fresh` forces a new scan when the text is unchanged but has moved.
-
-`serve` runs the daemon in the foreground. It is rarely needed by hand: the first command that would benefit starts one in the background by itself, and every command after that uses it. `status` says whether one is up, and `SCREENPEEK_NO_DAEMON=1` keeps everything in a single process. The daemon uses half the cores, and stops on its own once it has been idle for ten minutes or once the session that was using it has exited.
-
-`run` takes a whole interaction in one command and scans only when a step needs something it does not already know:
-
-```bash
-screenpeek run "click File" "click Save As" "type report.pdf" "key enter"
-```
-
-Its steps are `click <target>`, `fill <target> with <text>`, `type <text>`, `key <combination>` and `wait <target>`. Keys are named plainly: `enter`, `tab`, `esc`, `ctrl+s`, `alt+f4`.
-
-`tree` prints what the accessibility tree reports, window by window, which is the quickest way to see whether an application exposes one. `read` runs recognition over an image file instead of the screen.
-
-## Speed
-
-Measured on 1920x1080, Hyprland, CPU only. Full method and numbers in [BENCHMARK.md](BENCHMARK.md).
-
-| | screenpeek | screenshot to a vision model |
+| Desktop | Capture and input | Status |
 | --- | --- | --- |
-| Bytes produced | 2,214 | 1,291,832 |
-| Tokens for one look | ~554 | ~1,843 |
-| Capture | 9 ms | 529 ms |
-| One look, no daemon | 2,617 ms | 529 ms |
-| One look, daemon, changed rows only | ~400 ms | 529 ms |
-| Repeat look, nothing changed | 12 ms | 529 ms |
+| Linux Hyprland / Sway | Native Wayland protocols | Local Hyprland measurements; Sway code paths and parser tests |
+| Linux X11 | X11 | Implemented; desktop validation still needed |
+| GNOME / KDE Wayland | Screenshot and RemoteDesktop portals | Experimental; input requires desktop consent |
+| Windows | UI Automation, OCR fallback, native input | CI build/tests; interactive validation still needed |
 
-Where the time goes, what has been tried and what is worth trying next is in [PERFORMANCE.md](PERFORMANCE.md).
+GNOME window geometry needs the included extension; KDE uses an included
+one-shot KWin script. [Fedora setup and validation](docs/usage.md#fedora-gnome-and-kde).
+The portal capture path was tested on Hyprland; GNOME/KDE end-to-end operation
+still needs a real session. Mixed-scale multi-monitor portal captures remain
+unverified.
 
-A look costs about a third of the tokens of a screenshot and needs no round trip to place a click. The daemon's persistent capture buffer took capture from 354 ms to 9 ms; incremental reads take a repeat look from 2.6 s to about 0.4 s when only part of the screen changed.
+This alpha can misread labels or use stale positions. Ambiguous targets fail;
+use `--fresh` after a layout change and check the result of each action.
+Arabic is the weakest tested script. [Language results](docs/languages.md).
 
-## Use it from an agent
-
-`skill/` holds two agent skills: `screenpeek` tells an agent to scan instead of taking a screenshot, and `screenpeek-drive` tells it how to carry out a whole interaction in one command. Copy them into your agent's skills directory.
-
-```bash
-cp -r skill/screenpeek skill/screenpeek-drive ~/.claude/skills/
-```
-
-## Limits
-
-- Text only, where there is no control tree. An unlabelled icon is invisible to recognition.
-- Languages other than English come free through the accessibility tree. Where a window exposes none, `--lang` hands the pixels to tesseract, which is slower than the built-in reader.
-- Linux accessibility (AT-SPI) is not used: under Wayland a client is not told where it sits on screen, so the extents it reports cannot be clicked. [BENCHMARK.md](BENCHMARK.md) has the measurement.
-- The cache holds one scan per user.
-
-## License
-
-MIT
+[Commands and setup](docs/usage.md) · [Measurements](docs/performance.md) · [MIT](LICENSE)

@@ -19,36 +19,26 @@ use crate::capture::{self, Capture, Region};
 use crate::index::{self, Element};
 use crate::read::Engine;
 
-/// Past this much change, a full read beats stitching bands together.
-const FULL_REDRAW_FRACTION: f64 = 0.55;
-
-/// Changed bands grow by this much so glyphs are not cut in half.
-const DIRTY_MARGIN: u32 = 16;
-
-/// Bands closer than this are read as one.
-const BAND_GAP: u32 = 48;
+mod diff;
+use diff::{dirty_areas, merge_bands, worth_patching};
 
 /// How long a freshly started daemon is given to load its models.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// A daemon nobody has asked anything for this long shuts itself down, so an
-/// idle machine is not holding 12 MB of models and a capture buffer.
+/// Stop after this much idle time.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-/// Once every session that used the daemon has exited, it waits this long for
-/// a new one before shutting down.
+/// Allow this grace period after the last client session exits.
 const ORPHAN_GRACE: Duration = Duration::from_secs(60);
 
-/// Recognition is given half the cores, rounded down, so a scan never takes
-/// the machine away from whatever the user is actually doing.
+/// Reserve half the cores for other applications.
 fn worker_threads() -> usize {
     std::thread::available_parallelism()
         .map(|cores| (cores.get() / 2).max(2))
         .unwrap_or(2)
 }
 
-/// Bands that have been read before are remembered, so a screen that flips
-/// between two states, a menu opening and closing, is read once.
+/// Cache previously recognized bands across frame changes.
 const BAND_CACHE_SIZE: usize = 32;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,6 +53,8 @@ pub struct Request {
     /// A language to read with tesseract instead of the built-in model.
     #[serde(default)]
     pub lang: Option<String>,
+    #[serde(default)]
+    pub excluded: Vec<Region>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,6 +64,14 @@ pub enum Response {
 }
 
 pub fn serve() -> Result<()> {
+    // Avoid competing daemons overwriting the per-user endpoint.
+    if connect().is_some() {
+        if let Ok(summary) = endpoint_summary() {
+            eprintln!("screenpeek: {summary}, leaving it to serve");
+        }
+        return Ok(());
+    }
+
     rayon::ThreadPoolBuilder::new()
         .num_threads(worker_threads())
         .build_global()
@@ -91,7 +91,7 @@ pub fn serve() -> Result<()> {
     );
 
     let activity = Arc::new(Mutex::new(Activity::new()));
-    idle_shutdown(Arc::clone(&activity));
+    idle_shutdown(Arc::clone(&activity), port);
 
     for stream in listener.incoming() {
         let mut stream = match stream {
@@ -160,9 +160,15 @@ impl Activity {
     }
 }
 
-/// Ends the process once it is idle, or once every session that used it has
-/// exited. An agent that stops working takes the daemon with it.
-fn idle_shutdown(activity: Arc<Mutex<Activity>>) {
+/// Remove the endpoint only if it still belongs to this daemon.
+fn release_endpoint(port: u16) {
+    if matches!(read_endpoint(), Ok((listed, _)) if listed == port) {
+        let _ = endpoint_path().map(fs::remove_file);
+    }
+}
+
+/// Stop after idle timeout or when all client sessions have exited.
+fn idle_shutdown(activity: Arc<Mutex<Activity>>, port: u16) {
     std::thread::spawn(move || loop {
         sleep(Duration::from_secs(20));
         let reason = activity
@@ -171,6 +177,7 @@ fn idle_shutdown(activity: Arc<Mutex<Activity>>) {
             .and_then(|mut activity| activity.expired());
         if let Some(reason) = reason {
             eprintln!("screenpeek: {reason}, shutting down");
+            release_endpoint(port);
             std::process::exit(0);
         }
     });
@@ -194,72 +201,69 @@ struct Session {
     engine: Engine,
     how: &'static str,
     #[cfg(target_os = "linux")]
-    capturer: Capturer,
+    capturer: capture::Backend,
     previous: Option<Frame>,
     bands: HashMap<u64, Vec<Element>>,
     #[cfg(target_os = "linux")]
     tree: HashMap<(String, u32, u32), Vec<crate::read::atspi::Item>>,
+    /// Windows whose tree has been shown to account for the text in their
+    /// pixels. Absent means not checked yet, which counts as unverified.
+    #[cfg(target_os = "linux")]
+    covered: HashMap<(String, u32, u32), bool>,
 }
 
-/// How this session gets its pixels. The Wayland and X11 paths both keep a
-/// connection open; the portable one opens a fresh session per frame.
-#[cfg(target_os = "linux")]
-enum Capturer {
-    Wayland(capture::wayland::Screencopy),
-    X11(capture::x11::Screen),
-    Portable,
-}
-
-/// The last full-screen look and what recognition read out of it. Text that
-/// came from a window's accessibility tree is not kept here: it is asked for
-/// again on every look, which is cheap.
+/// Cache the previous frame and keep OCR results separate from tree labels.
 struct Frame {
     key: u64,
     image: RgbaImage,
     pixels: Vec<Element>,
+    elements: Vec<Element>,
     lang: Option<String>,
 }
+
+/// Minimum OCR text coverage required to trust a window’s accessibility tree.
+const COVERAGE_THRESHOLD: f32 = 0.9;
 
 /// A window whose contents are known from its tree and whose position is
 /// known from the compositor.
 struct Located {
     rect: Region,
     elements: Vec<Element>,
+    /// How the window is remembered between looks, and `None` when it cannot
+    /// be identified.
+    key: Option<(String, u32, u32)>,
+    /// Skip OCR only after the tree has passed the coverage check.
+    verified: bool,
 }
 
 /// Recognized text outside the located windows, plus everything those windows
 /// say about themselves.
 fn merge(pixels: Vec<Element>, located: Vec<Located>) -> Vec<Element> {
-    let mut elements: Vec<Element> = pixels
-        .into_iter()
-        .filter(|element| {
-            !located
-                .iter()
-                .any(|window| window.rect.contains(element.x, element.y))
-        })
-        .collect();
-
-    for window in located {
-        elements.extend(window.elements);
-    }
-    index::number(&mut elements);
-    elements
+    index::merge_tree(
+        pixels,
+        located
+            .into_iter()
+            .flat_map(|window| window.elements)
+            .collect(),
+    )
 }
 
-/// The changed areas that no located window accounts for. Anything inside one
-/// is already described by its tree, so the pixels there are not worth reading.
+/// Keep changed areas unless a verified tree fully covers them.
 fn outside(changed: &[Region], located: &[Located], origin: (i32, i32)) -> Vec<Region> {
     changed
         .iter()
         .filter(|area| {
             let x = area.x + origin.0;
             let y = area.y + origin.1;
-            !located.iter().any(|window| {
-                x >= window.rect.x
-                    && y >= window.rect.y
-                    && x + area.width as i32 <= window.rect.x + window.rect.width as i32
-                    && y + area.height as i32 <= window.rect.y + window.rect.height as i32
-            })
+            !located
+                .iter()
+                .filter(|window| window.verified)
+                .any(|window| {
+                    x >= window.rect.x
+                        && y >= window.rect.y
+                        && x + area.width as i32 <= window.rect.x + window.rect.width as i32
+                        && y + area.height as i32 <= window.rect.y + window.rect.height as i32
+                })
         })
         .copied()
         .collect()
@@ -269,13 +273,8 @@ impl Session {
     fn new() -> Result<Session> {
         #[cfg(target_os = "linux")]
         {
-            let (capturer, how) = match capture::wayland::Screencopy::new() {
-                Ok(screencopy) => (Capturer::Wayland(screencopy), "wlr-screencopy"),
-                Err(_) => match capture::x11::Screen::new() {
-                    Ok(screen) => (Capturer::X11(screen), "x11"),
-                    Err(_) => (Capturer::Portable, "portable capture"),
-                },
-            };
+            let capturer = capture::Backend::new()?;
+            let how = capturer.name();
 
             Ok(Session {
                 engine: Engine::load()?,
@@ -284,6 +283,7 @@ impl Session {
                 previous: None,
                 bands: HashMap::new(),
                 tree: HashMap::new(),
+                covered: HashMap::new(),
             })
         }
 
@@ -298,10 +298,18 @@ impl Session {
 
     fn look(&mut self, request: &Request) -> Result<Vec<Element>> {
         let started = Instant::now();
-        let capture = self.capture(request.monitor)?;
-        let captured = started.elapsed();
+        let capture = self.capture(request.monitor, request.region)?;
+        self.read_capture(request, capture, started.elapsed())
+    }
 
-        let key = context_key(request.monitor, capture.origin);
+    fn read_capture(
+        &mut self,
+        request: &Request,
+        mut capture: Capture,
+        captured: Duration,
+    ) -> Result<Vec<Element>> {
+        capture.exclude(&request.excluded);
+        let key = context_key(request.monitor, capture.origin, &request.excluded);
         let comparable = self
             .previous
             .as_ref()
@@ -314,31 +322,70 @@ impl Session {
             (true, Some(frame)) => dirty_areas(&frame.image, &capture.image),
             _ => Vec::new(),
         };
-        let located = self.located_windows(&changed, capture.origin);
-
+        if comparable && changed.is_empty() {
+            let elements = self.previous.as_ref().unwrap().elements.clone();
+            eprintln!(
+                "unchanged: {} elements, capture {}ms, read 0ms",
+                elements.len(),
+                captured.as_millis()
+            );
+            return Ok(elements);
+        }
+        #[cfg(target_os = "linux")]
+        if !comparable {
+            self.tree.clear();
+        }
+        // One question to the compositor per look: the same window list gives
+        // the edges recognition splits on and the places the tree hangs on.
+        let placements = window_placements();
+        let edges = edges_of(&placements);
         let recognition = Instant::now();
-        // Another language means tesseract, which reads a whole image at a
-        // time, so the band and line caches have nothing to offer it.
-        let (pixels, what) = if let Some(language) = &request.lang {
+
+        // Full-frame OCR and tree traversal can run independently.
+        let overlap = request.lang.is_none() && !comparable;
+        let (located, read_ahead) = if overlap {
+            // The tree cache comes out of the session for the duration, so the
+            // walk can hold it while recognition holds the engine.
+            let mut tree = std::mem::take(&mut self.tree);
+            let (covered, engine) = (&self.covered, &self.engine);
+            let (pixels, located) = std::thread::scope(|scope| {
+                let walker = scope.spawn(|| {
+                    located_windows(&mut tree, covered, &placements, &changed, capture.origin)
+                });
+                let pixels = engine.read_within(&capture, &edges);
+                (pixels, walker.join().unwrap_or_default())
+            });
+            self.tree = tree;
+            (located, Some(pixels?))
+        } else {
             (
-                crate::read::tesseract::read(&capture, language)?,
-                "tesseract",
+                located_windows(
+                    &mut self.tree,
+                    &self.covered,
+                    &placements,
+                    &changed,
+                    capture.origin,
+                ),
+                None,
             )
+        };
+
+        // Patch Tesseract reads too, since its cost scales with image area.
+        let language = request.lang.as_deref();
+        let (pixels, what) = if let Some(pixels) = read_ahead {
+            (pixels, "full")
         } else {
             match comparable.then_some(self.previous.as_ref()).flatten() {
-                None => (self.engine.read(&capture)?, "full"),
+                None => (self.read_all(&capture, &edges, language)?, "full"),
                 Some(frame) => {
-                    let unread = outside(&changed, &located, capture.origin);
+                    // Merge bands to avoid repeated detector startup costs.
+                    let unread: Vec<Region> =
+                        merge_bands(&outside(&changed, &located, capture.origin))
+                            .into_iter()
+                            .collect();
 
                     if unread.is_empty() {
-                        (
-                            frame.pixels.clone(),
-                            if changed.is_empty() {
-                                "unchanged"
-                            } else {
-                                "window only"
-                            },
-                        )
+                        (frame.pixels.clone(), "window only")
                     } else if worth_patching(&unread, &capture.image) {
                         let kept: Vec<Element> = frame
                             .pixels
@@ -350,18 +397,41 @@ impl Session {
                             })
                             .cloned()
                             .collect();
-                        (self.patch(kept, &capture, &unread)?, "patched")
+                        (
+                            self.patch(kept, &capture, &unread, &edges, language)?,
+                            "patched",
+                        )
                     } else {
-                        (self.engine.read(&capture)?, "full")
+                        (self.read_all(&capture, &edges, language)?, "full")
                     }
                 }
             }
         };
 
-        let elements = merge(pixels.clone(), located);
+        // Compare tree coverage during full reads, when both results are available.
+        if what == "full" {
+            verify_coverage(&mut self.covered, &located, &pixels);
+        }
+
+        let (verified, windows) = (
+            located.iter().filter(|window| window.verified).count(),
+            located.len(),
+        );
+
+        let bounds = Region {
+            x: capture.origin.0,
+            y: capture.origin.1,
+            width: capture.image.width(),
+            height: capture.image.height(),
+        };
+        let mut elements: Vec<_> = merge(pixels.clone(), located)
+            .into_iter()
+            .filter(|element| bounds.contains(element.x, element.y))
+            .collect();
+        crate::caller::filter(&mut elements, &request.excluded);
 
         eprintln!(
-            "{what}: {} elements, capture {}ms, read {}ms",
+            "{what}: {} elements, {verified}/{windows} window(s) verified, capture {}ms, read {}ms",
             elements.len(),
             captured.as_millis(),
             recognition.elapsed().as_millis()
@@ -371,32 +441,32 @@ impl Session {
             key,
             image: capture.image,
             pixels,
+            elements: elements.clone(),
             lang: request.lang.clone(),
         });
 
-        Ok(match request.region {
-            Some(region) => elements
-                .into_iter()
-                .filter(|element| region.contains(element.x, element.y))
-                .collect(),
-            None => elements,
-        })
+        Ok(elements)
     }
+}
 
-    /// Windows the accessibility tree describes and the compositor has placed.
-    /// Their text needs no recognition at all, and a window whose pixels have
-    /// not changed is not walked again either.
-    #[cfg(target_os = "linux")]
-    fn located_windows(&mut self, changed: &[Region], origin: (i32, i32)) -> Vec<Located> {
-        let Ok(placements) = crate::read::geometry::windows() else {
+/// Resolve visible trees using separate caches so traversal can overlap OCR.
+#[cfg(target_os = "linux")]
+fn located_windows(
+    tree: &mut HashMap<(String, u32, u32), Vec<crate::read::atspi::Item>>,
+    covered: &HashMap<(String, u32, u32), bool>,
+    placements: &[crate::read::geometry::Placement],
+    changed: &[Region],
+    origin: (i32, i32),
+) -> Vec<Located> {
+    {
+        if placements.is_empty() {
             return Vec::new();
-        };
+        }
 
         let touched = |window: &crate::read::atspi::Window| {
-            let Some(placement) = placements.iter().find(|placement| {
-                placement.title == window.title
-                    || (placement.width == window.width && placement.height == window.height)
-            }) else {
+            let Some(placement) = crate::read::fuse::placement_index(window, placements)
+                .map(|index| &placements[index])
+            else {
                 return true;
             };
 
@@ -410,7 +480,7 @@ impl Session {
             })
         };
 
-        let known = &self.tree;
+        let known = &*tree;
         let Ok(mut windows) = crate::read::atspi::windows_where(|window| {
             !known.contains_key(&(window.title.clone(), window.width, window.height))
                 || touched(window)
@@ -421,52 +491,110 @@ impl Session {
         for window in &mut windows {
             let key = (window.title.clone(), window.width, window.height);
             if window.items.is_empty() {
-                if let Some(remembered) = self.tree.get(&key) {
+                if let Some(remembered) = tree.get(&key) {
                     window.items = remembered.clone();
                 }
             } else {
-                self.tree.insert(key, window.items.clone());
+                tree.insert(key, window.items.clone());
             }
         }
 
-        crate::read::fuse::place(&windows, &placements)
+        crate::read::fuse::place(&windows, placements)
             .into_iter()
-            .map(|placed| Located {
-                rect: placed.rect,
-                elements: placed.elements,
+            .map(|placed| {
+                let key = placed.key;
+                let verified = key
+                    .as_ref()
+                    .and_then(|key| covered.get(key))
+                    .copied()
+                    .unwrap_or(false);
+                Located {
+                    rect: placed.rect,
+                    elements: placed.elements,
+                    key,
+                    verified,
+                }
             })
             .collect()
     }
+}
 
-    #[cfg(not(target_os = "linux"))]
-    fn located_windows(&mut self, _changed: &[Region], _origin: (i32, i32)) -> Vec<Located> {
-        Vec::new()
-    }
+#[cfg(not(target_os = "linux"))]
+fn located_windows(
+    _tree: &mut HashMap<(String, u32, u32), ()>,
+    _covered: &HashMap<(String, u32, u32), bool>,
+    _placements: &[()],
+    _changed: &[Region],
+    _origin: (i32, i32),
+) -> Vec<Located> {
+    Vec::new()
+}
 
-    fn capture(&mut self, monitor: Option<usize>) -> Result<Capture> {
-        #[cfg(target_os = "linux")]
-        {
-            let held = match &mut self.capturer {
-                Capturer::Wayland(screencopy) => Some(screencopy.capture(monitor)),
-                Capturer::X11(screen) => Some(screen.capture(monitor)),
-                Capturer::Portable => None,
-            };
-
-            match held {
-                Some(Ok(capture)) => return Ok(capture),
-                Some(Err(error)) => {
-                    eprintln!("screenpeek: {} failed, falling back: {error}", self.how);
-                    self.capturer = Capturer::Portable;
-                    self.how = "portable capture";
-                }
-                None => {}
-            }
+/// Cache whether each tree covers enough of the recognized text.
+fn verify_coverage(
+    covered: &mut HashMap<(String, u32, u32), bool>,
+    located: &[Located],
+    recognized: &[Element],
+) {
+    for window in located {
+        let Some(key) = window.key.clone() else {
+            continue;
+        };
+        let inside: Vec<&Element> = recognized
+            .iter()
+            .filter(|element| window.rect.contains(element.x, element.y))
+            .collect();
+        // Nothing recognized means nothing to check against: a blank
+        // window stays unverified rather than being trusted by default.
+        if inside.is_empty() {
+            covered.insert(key, false);
+            continue;
         }
-        capture::screen(monitor, None)
+        let claimed: Vec<&str> = window
+            .elements
+            .iter()
+            .map(|element| element.text.as_str())
+            .collect();
+        let accounted = inside
+            .iter()
+            .filter(|element| {
+                claimed
+                    .iter()
+                    .any(|text| text.contains(element.text.as_str()))
+            })
+            .count();
+        let coverage = accounted as f32 / inside.len() as f32;
+        covered.insert(key, coverage >= COVERAGE_THRESHOLD);
     }
 }
 
 impl Session {
+    fn capture(&mut self, monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
+        #[cfg(target_os = "linux")]
+        {
+            self.capturer.capture(monitor, region)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            capture::screen(monitor, region)
+        }
+    }
+}
+
+impl Session {
+    /// Reads a whole capture with whichever engine the request asked for.
+    fn read_all(
+        &self,
+        capture: &Capture,
+        edges: &[i32],
+        language: Option<&str>,
+    ) -> Result<Vec<Element>> {
+        match language {
+            Some(language) => crate::read::tesseract::read(capture, language),
+            None => self.engine.read_within(capture, edges),
+        }
+    }
+
     /// Re-reads the changed bands, in parallel and skipping any band whose
     /// pixels have been read before.
     fn patch(
@@ -474,6 +602,8 @@ impl Session {
         kept: Vec<Element>,
         capture: &Capture,
         bands: &[Region],
+        edges: &[i32],
+        language: Option<&str>,
     ) -> Result<Vec<Element>> {
         let crops: Vec<(u64, Capture)> = bands
             .iter()
@@ -487,7 +617,7 @@ impl Session {
                 )
                 .to_image();
                 (
-                    hash_image(&image),
+                    band_key(&image, language),
                     Capture {
                         image,
                         origin: capture.to_desktop(band.x, band.y),
@@ -496,18 +626,21 @@ impl Session {
             })
             .collect();
 
+        // Evict before reading, so this request never loses a band mid-assembly.
+        if self.bands.len() + crops.len() > BAND_CACHE_SIZE {
+            self.bands.clear();
+        }
         let fresh: Vec<(u64, Vec<Element>)> = crops
             .par_iter()
             .filter(|(key, _)| !self.bands.contains_key(key))
-            .map(|(key, crop)| self.engine.read(crop).map(|read| (*key, read)))
+            .map(|(key, crop)| {
+                self.read_all(crop, edges, language)
+                    .map(|read| (*key, offsets_from(&read, crop.origin)))
+            })
             .collect::<Result<_>>()?;
 
         for (key, read) in fresh {
-            if self.bands.len() >= BAND_CACHE_SIZE {
-                self.bands.clear();
-            }
-            self.bands
-                .insert(key, offsets_from(&read, crop_origin(&crops, key)));
+            self.bands.insert(key, read);
         }
 
         let mut elements = kept;
@@ -538,12 +671,35 @@ fn offsets_from(elements: &[Element], origin: (i32, i32)) -> Vec<Element> {
         .collect()
 }
 
-fn crop_origin(crops: &[(u64, Capture)], key: u64) -> (i32, i32) {
-    crops
-        .iter()
-        .find(|(candidate, _)| *candidate == key)
-        .map(|(_, crop)| crop.origin)
-        .unwrap_or((0, 0))
+/// Every mapped window, or nothing when the compositor cannot be asked.
+#[cfg(target_os = "linux")]
+fn window_placements() -> Vec<crate::read::geometry::Placement> {
+    crate::read::geometry::windows().unwrap_or_default()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn window_placements() -> Vec<()> {
+    Vec::new()
+}
+
+/// Where those windows end, which is where recognition must stop joining text.
+#[cfg(target_os = "linux")]
+fn edges_of(placements: &[crate::read::geometry::Placement]) -> Vec<i32> {
+    crate::read::geometry::edges_of(placements)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn edges_of(_placements: &[()]) -> Vec<i32> {
+    Vec::new()
+}
+
+/// Band text is remembered by its pixels and the language it was read in:
+/// the same pixels read as German and as Hebrew are two different answers.
+fn band_key(image: &RgbaImage, language: Option<&str>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_image(image).hash(&mut hasher);
+    language.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn hash_image(image: &RgbaImage) -> u64 {
@@ -553,75 +709,11 @@ fn hash_image(image: &RgbaImage) -> u64 {
     hasher.finish()
 }
 
-/// The areas that differ between two frames, top to bottom. Rows close
-/// together are reported as one area, and each one is trimmed to the columns
-/// that actually changed so a change inside a window stays inside it.
-fn dirty_areas(before: &RgbaImage, after: &RgbaImage) -> Vec<Region> {
-    let width = before.width();
-    let height = before.height();
-    let stride = width as usize * 4;
-    let (before, after) = (before.as_raw(), after.as_raw());
-
-    fn row(image: &[u8], index: usize, stride: usize) -> &[u8] {
-        &image[index * stride..][..stride]
-    }
-    let changed = |index: usize| row(before, index, stride) != row(after, index, stride);
-
-    let mut bands: Vec<(u32, u32)> = Vec::new();
-    for index in 0..height as usize {
-        if !changed(index) {
-            continue;
-        }
-        let index = index as u32;
-        match bands.last_mut() {
-            Some((_, end)) if index - *end <= BAND_GAP => *end = index,
-            _ => bands.push((index, index)),
-        }
-    }
-
-    bands
-        .into_iter()
-        .map(|(start, end)| {
-            let (mut first, mut last) = (width, 0);
-            for index in start..=end {
-                if !changed(index as usize) {
-                    continue;
-                }
-                let old = row(before, index as usize, stride);
-                let new = row(after, index as usize, stride);
-                for column in 0..width {
-                    let pixel = column as usize * 4;
-                    if old[pixel..pixel + 4] != new[pixel..pixel + 4] {
-                        first = first.min(column);
-                        last = last.max(column);
-                    }
-                }
-            }
-
-            let left = first.saturating_sub(DIRTY_MARGIN);
-            let right = (last + DIRTY_MARGIN + 1).min(width);
-            let top = start.saturating_sub(DIRTY_MARGIN);
-            let bottom = (end + DIRTY_MARGIN + 1).min(height);
-
-            Region {
-                x: left as i32,
-                y: top as i32,
-                width: right.saturating_sub(left).max(1),
-                height: bottom - top,
-            }
-        })
-        .collect()
-}
-
-fn worth_patching(bands: &[Region], image: &RgbaImage) -> bool {
-    let changed: u32 = bands.iter().map(|band| band.height).sum();
-    f64::from(changed) / f64::from(image.height()) < FULL_REDRAW_FRACTION
-}
-
-fn context_key(monitor: Option<usize>, origin: (i32, i32)) -> u64 {
+fn context_key(monitor: Option<usize>, origin: (i32, i32), excluded: &[Region]) -> u64 {
     let mut hasher = DefaultHasher::new();
     monitor.hash(&mut hasher);
     origin.hash(&mut hasher);
+    excluded.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -631,7 +723,11 @@ pub fn ask(
     region: Option<Region>,
     monitor: Option<usize>,
     lang: Option<String>,
+    excluded: Vec<Region>,
 ) -> Option<Vec<Element>> {
+    if std::env::var_os("SCREENPEEK_NO_DAEMON").is_some() {
+        return None;
+    }
     let mut stream = match connect() {
         Some(stream) => stream,
         None => {
@@ -647,6 +743,7 @@ pub fn ask(
         monitor,
         session: owning_session(),
         lang,
+        excluded,
     };
     let mut line = serde_json::to_vec(&request).ok()?;
     line.push(b'\n');
@@ -683,10 +780,6 @@ fn connect() -> Option<TcpStream> {
 /// Starts a daemon in the background and waits for it to answer. The first
 /// scan of a session pays for this once; every later one is on the fast path.
 fn start() -> Option<()> {
-    if std::env::var_os("SCREENPEEK_NO_DAEMON").is_some() {
-        return None;
-    }
-
     let binary = std::env::current_exe().ok()?;
     Command::new(binary)
         .arg("serve")
@@ -726,7 +819,7 @@ fn endpoint_path() -> Result<PathBuf> {
     Ok(dirs::cache_dir()
         .ok_or_else(|| anyhow!("no cache directory on this system"))?
         .join("screenpeek")
-        .join("daemon"))
+        .join("daemon-v2"))
 }
 
 fn write_endpoint(port: u16, token: &str) -> Result<()> {
@@ -771,69 +864,4 @@ fn new_token() -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn frame(width: u32, height: u32, fill: u8) -> RgbaImage {
-        RgbaImage::from_pixel(width, height, image::Rgba([fill, fill, fill, 255]))
-    }
-
-    fn paint_row(image: &mut RgbaImage, y: u32) {
-        for x in 0..image.width() {
-            image.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
-        }
-    }
-
-    #[test]
-    fn identical_frames_have_no_changed_areas() {
-        assert!(dirty_areas(&frame(64, 64, 0), &frame(64, 64, 0)).is_empty());
-    }
-
-    #[test]
-    fn a_changed_row_becomes_one_band_with_a_margin() {
-        let before = frame(64, 400, 0);
-        let mut after = before.clone();
-        paint_row(&mut after, 200);
-
-        let bands = dirty_areas(&before, &after);
-        assert_eq!(bands.len(), 1);
-        assert_eq!(bands[0].y, 200 - DIRTY_MARGIN as i32);
-        assert_eq!(bands[0].height, 2 * DIRTY_MARGIN + 1);
-        assert_eq!(bands[0].width, 64);
-    }
-
-    #[test]
-    fn distant_changes_stay_in_separate_bands() {
-        let before = frame(64, 600, 0);
-        let mut after = before.clone();
-        paint_row(&mut after, 20);
-        paint_row(&mut after, 500);
-
-        let bands = dirty_areas(&before, &after);
-        assert_eq!(bands.len(), 2, "{bands:?}");
-        assert!(bands[0].y < bands[1].y);
-    }
-
-    #[test]
-    fn nearby_changes_merge_into_one_band() {
-        let before = frame(64, 600, 0);
-        let mut after = before.clone();
-        paint_row(&mut after, 100);
-        paint_row(&mut after, 100 + BAND_GAP - 1);
-
-        assert_eq!(dirty_areas(&before, &after).len(), 1);
-    }
-
-    #[test]
-    fn patching_is_abandoned_once_most_of_the_screen_changed() {
-        let image = frame(100, 100, 0);
-        let band = |height| Region {
-            x: 0,
-            y: 0,
-            width: 100,
-            height,
-        };
-        assert!(worth_patching(&[band(10)], &image));
-        assert!(!worth_patching(&[band(30), band(30), band(30)], &image));
-    }
-}
+mod tests;

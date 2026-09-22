@@ -1,10 +1,4 @@
-//! Where each window actually is, asked of the compositor or the X server.
-//!
-//! The accessibility tree knows what a window contains but not where it sits.
-//! wlroots compositors keep that in their own IPC: Hyprland answers a line of
-//! JSON, Sway speaks the i3 protocol. X11 publishes the same thing as window
-//! properties on the root. Either way nothing has to be worked out from
-//! pixels.
+//! Query visible window geometry from the compositor or X11.
 
 use std::env;
 use std::io::{Read, Write};
@@ -28,6 +22,7 @@ pub struct Placement {
     pub width: u32,
     pub height: u32,
     pub focused: bool,
+    pub pid: Option<u32>,
 }
 
 /// Every mapped window, or an error when nothing can be asked.
@@ -38,10 +33,27 @@ pub fn windows() -> Result<Vec<Placement>> {
     if let Some(socket) = env::var_os("SWAYSOCK") {
         return sway(Path::new(&socket));
     }
-    if env::var_os("DISPLAY").is_some() {
-        return x11();
+    if env::var_os("WAYLAND_DISPLAY").is_some() {
+        return super::geometry_helper::windows();
     }
-    bail!("nothing to ask for window positions; Hyprland, Sway and X11 are supported")
+    x11()
+}
+
+/// Return sorted window edges for splitting adjacent controls, or none if unavailable.
+pub fn edges() -> Vec<i32> {
+    edges_of(&windows().unwrap_or_default())
+}
+
+/// The same, from a window list already in hand, so a caller that needs both
+/// asks the compositor once.
+pub fn edges_of(placements: &[Placement]) -> Vec<i32> {
+    let mut edges: Vec<i32> = placements
+        .iter()
+        .flat_map(|window| [window.x, window.x + window.width as i32])
+        .collect();
+    edges.sort_unstable();
+    edges.dedup();
+    edges
 }
 
 /// On X11 every window manager publishes the same properties on the root, so
@@ -68,6 +80,9 @@ fn x11() -> Result<Vec<Placement>> {
     let active_window = atom("_NET_ACTIVE_WINDOW")?;
     let net_name = atom("_NET_WM_NAME")?;
     let utf8 = atom("UTF8_STRING")?;
+    let process_id = atom("_NET_WM_PID")?;
+    let window_desktop = atom("_NET_WM_DESKTOP")?;
+    let current_desktop = atom("_NET_CURRENT_DESKTOP")?;
 
     let listed = connection
         .get_property(false, root, client_list, AtomEnum::WINDOW, 0, u32::MAX)?
@@ -81,11 +96,30 @@ fn x11() -> Result<Vec<Placement>> {
         .and_then(|mut values| values.next())
         .unwrap_or(0);
 
+    // Skip windows on other desktops to avoid masking visible content.
+    let showing = connection
+        .get_property(false, root, current_desktop, AtomEnum::CARDINAL, 0, 1)?
+        .reply()?
+        .value32()
+        .and_then(|mut values| values.next());
+
     let mut placements = Vec::new();
     for window in windows {
         let attributes = connection.get_window_attributes(window)?.reply()?;
         if attributes.map_state != MapState::VIEWABLE {
             continue;
+        }
+
+        if let Some(showing) = showing {
+            let desktop = connection
+                .get_property(false, window, window_desktop, AtomEnum::CARDINAL, 0, 1)?
+                .reply()?
+                .value32()
+                .and_then(|mut values| values.next());
+            // 0xFFFFFFFF means the window is on every desktop.
+            if matches!(desktop, Some(desktop) if desktop != showing && desktop != u32::MAX) {
+                continue;
+            }
         }
 
         let geometry = connection.get_geometry(window)?.reply()?;
@@ -109,6 +143,11 @@ fn x11() -> Result<Vec<Placement>> {
             width: geometry.width as u32,
             height: geometry.height as u32,
             focused: window == focused,
+            pid: connection
+                .get_property(false, window, process_id, AtomEnum::CARDINAL, 0, 1)?
+                .reply()?
+                .value32()
+                .and_then(|mut values| values.next()),
         });
     }
 
@@ -141,14 +180,28 @@ pub fn focused() -> Result<Placement> {
 }
 
 fn hyprland(socket: &Path) -> Result<Vec<Placement>> {
-    let mut connection = UnixStream::connect(socket).context("cannot reach Hyprland")?;
-    connection.write_all(b"j/clients")?;
+    let clients: Vec<HyprlandClient> = serde_json::from_str(&hyprland_ask(socket, "j/clients")?)?;
+    // Skip hidden workspaces before placing trees or excluding the caller.
+    let monitors: Vec<HyprlandMonitor> =
+        serde_json::from_str(&hyprland_ask(socket, "j/monitors")?).unwrap_or_default();
+    let shown: Vec<i32> = monitors
+        .iter()
+        .map(|monitor| monitor.active_workspace.id)
+        .collect();
 
+    Ok(clients
+        .into_iter()
+        .filter(|client| shown.is_empty() || shown.contains(&client.workspace.id))
+        .filter_map(placement_of)
+        .collect())
+}
+
+fn hyprland_ask(socket: &Path, request: &str) -> Result<String> {
+    let mut connection = UnixStream::connect(socket).context("cannot reach Hyprland")?;
+    connection.write_all(request.as_bytes())?;
     let mut reply = String::new();
     connection.read_to_string(&mut reply)?;
-
-    let clients: Vec<HyprlandClient> = serde_json::from_str(&reply)?;
-    Ok(clients.into_iter().filter_map(placement_of).collect())
+    Ok(reply)
 }
 
 fn hyprland_socket() -> Result<PathBuf> {
@@ -161,17 +214,33 @@ fn hyprland_socket() -> Result<PathBuf> {
         .join(".socket.sock"))
 }
 
+#[derive(Default, Deserialize)]
+struct HyprlandMonitor {
+    #[serde(rename = "activeWorkspace", default)]
+    active_workspace: HyprlandWorkspace,
+}
+
+#[derive(Default, Deserialize)]
+struct HyprlandWorkspace {
+    #[serde(default)]
+    id: i32,
+}
+
 #[derive(Deserialize)]
-struct HyprlandClient {
+pub(super) struct HyprlandClient {
     title: String,
     at: [i32; 2],
     size: [i32; 2],
     mapped: bool,
     #[serde(rename = "focusHistoryID")]
     focus_history_id: i32,
+    #[serde(default)]
+    pid: Option<u32>,
+    #[serde(default)]
+    workspace: HyprlandWorkspace,
 }
 
-fn placement_of(client: HyprlandClient) -> Option<Placement> {
+pub(super) fn placement_of(client: HyprlandClient) -> Option<Placement> {
     if !client.mapped || client.size[0] <= 0 || client.size[1] <= 0 {
         return None;
     }
@@ -182,6 +251,7 @@ fn placement_of(client: HyprlandClient) -> Option<Placement> {
         width: client.size[0] as u32,
         height: client.size[1] as u32,
         focused: client.focus_history_id == 0,
+        pid: client.pid,
     })
 }
 
@@ -215,9 +285,7 @@ fn i3_request(socket: &Path, message: u32) -> Result<String> {
     Ok(String::from_utf8(body)?)
 }
 
-/// Sway reports a container rectangle and, inside it, where the client's own
-/// surface sits. The surface is what the accessibility tree describes, so that
-/// is what gets used.
+/// Use Sway’s client-surface rectangle as the AT-SPI origin.
 #[derive(Deserialize)]
 struct SwayNode {
     #[serde(default)]
@@ -277,6 +345,7 @@ fn sway_placement(node: &SwayNode) -> Option<Placement> {
         width: width as u32,
         height: height as u32,
         focused: node.focused,
+        pid: node.pid,
     })
 }
 
@@ -287,7 +356,7 @@ mod tests {
     #[test]
     fn hyprland_clients_become_placements() {
         let json = r#"[
-            {"title":"Home","at":[775,12],"size":[749,840],"mapped":true,"focusHistoryID":0},
+            {"title":"Home","at":[775,12],"size":[749,840],"mapped":true,"focusHistoryID":0,"pid":1234},
             {"title":"Terminal","at":[12,12],"size":[749,840],"mapped":true,"focusHistoryID":1},
             {"title":"Hidden","at":[0,0],"size":[0,0],"mapped":false,"focusHistoryID":2}
         ]"#;
@@ -298,7 +367,29 @@ mod tests {
         assert_eq!(placements[0].title, "Home");
         assert_eq!((placements[0].x, placements[0].y), (775, 12));
         assert!(placements[0].focused);
+        assert_eq!(placements[0].pid, Some(1234));
         assert!(!placements[1].focused);
+    }
+
+    /// Hidden workspace geometry must not mask the visible window.
+    #[test]
+    fn windows_on_other_workspaces_are_left_out() {
+        let json = r#"[
+            {"title":"Gmail","at":[12,12],"size":[1512,840],"mapped":true,
+             "focusHistoryID":0,"pid":10,"workspace":{"id":2}},
+            {"title":"Terminal","at":[12,12],"size":[1512,840],"mapped":true,
+             "focusHistoryID":1,"pid":11,"workspace":{"id":1}}
+        ]"#;
+        let clients: Vec<HyprlandClient> = serde_json::from_str(json).unwrap();
+        let shown = [2];
+        let visible: Vec<Placement> = clients
+            .into_iter()
+            .filter(|client| shown.contains(&client.workspace.id))
+            .filter_map(placement_of)
+            .collect();
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].title, "Gmail");
     }
 
     /// Trimmed from a real `swaymsg -t get_tree`: a workspace holding one
@@ -344,6 +435,7 @@ mod tests {
 
         let home = &placements[0];
         assert_eq!(home.title, "Home");
+        assert_eq!(home.pid, Some(4242));
         assert_eq!((home.x, home.y), (10, 32));
         assert_eq!((home.width, home.height), (948, 1038));
         assert!(home.focused);
@@ -370,5 +462,23 @@ mod tests {
         )
         .unwrap();
         assert!(sway_placement(&node).is_none());
+    }
+
+    /// Needs a running compositor, so it is not part of the normal run.
+    #[test]
+    #[ignore = "needs a live session; run cargo test --release window_edges -- --ignored --nocapture"]
+    fn window_edges_come_back_from_the_compositor() {
+        let placements = windows().expect("a compositor to ask");
+        let edges = edges();
+        println!("{} window(s), edges {edges:?}", placements.len());
+        assert!(!edges.is_empty(), "a mapped window has two edges");
+        for window in &placements {
+            assert!(edges.contains(&window.x), "{window:?} left edge missing");
+            assert!(
+                edges.contains(&(window.x + window.width as i32)),
+                "{window:?} right edge missing"
+            );
+        }
+        assert!(edges.windows(2).all(|pair| pair[0] < pair[1]), "sorted");
     }
 }

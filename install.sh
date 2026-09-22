@@ -5,9 +5,9 @@ set -eu
 repo=I-No-oNe/screenpeek
 prefix=${PREFIX:-$HOME/.local/bin}
 
-case "$(uname -s)" in
-  Linux) archive=screenpeek-x86_64-linux.tar.gz ;;
-  *) echo "no prebuilt binary for $(uname -s); use: cargo install --git https://github.com/$repo" >&2; exit 1 ;;
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) archive=screenpeek-x86_64-linux.tar.gz ;;
+  *) echo "no prebuilt binary for $(uname -s)-$(uname -m); use: cargo install --git https://github.com/$repo" >&2; exit 1 ;;
 esac
 
 tmp=$(mktemp -d)

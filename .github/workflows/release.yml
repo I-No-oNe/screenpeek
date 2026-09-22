@@ -8,7 +8,7 @@ on:
       tag:
         description: Tag to publish the binaries against
         required: true
-        default: v0.0.1
+        default: v0.0.1-alpha
 
 permissions:
   contents: write
@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             archive: screenpeek-x86_64-linux.tar.gz
           - os: windows-latest
@@ -34,7 +34,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --target ${{ matrix.target }}
+      - run: cargo build --locked --release --target ${{ matrix.target }}
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -47,4 +47,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: ${{ matrix.archive }}

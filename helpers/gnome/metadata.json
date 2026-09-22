@@ -1,0 +1,8 @@
+{
+  "uuid": "screenpeek@screenpeek",
+  "name": "Screenpeek window geometry",
+  "description": "Expose visible window positions to screenpeek over the session bus.",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
+  "version": 1,
+  "url": "https://github.com/I-No-oNe/screenpeek"
+}

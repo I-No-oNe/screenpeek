@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Regenerates dialog.png, a synthetic settings window drawn at the sizes a real
-# one uses: 13 px body text, 15 px headings, on a 900x560 window. Deterministic,
-# so the accuracy numbers in BENCHMARK.md can be reproduced.
+# Regenerate the 900×560 settings fixture with labelled controls.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -35,3 +33,13 @@ magick -size 900x560 xc:'#f6f6f6' \
   -draw "text 716,503 'Apply'" \
   -draw "text 826,503 'Save'" \
   dialog.png
+
+# Adjacent controls, small capitals and ordinary multi-word labels.
+magick -size 640x240 xc:'#f6f6f6' \
+  -fill '#222222' -font "$font" -pointsize 13 \
+  -draw "text 24,40 'FILE'" -draw "text 66,40 'EDIT'" \
+  -draw "text 24,80 'INPUT'" -draw "text 80,80 'OUTPUT'" \
+  -draw "text 24,120 'Font size'" -draw "text 110,120 '13'" \
+  -pointsize 11 -draw "text 24,160 'Open file'" \
+  -pointsize 12 -draw "text 24,200 'Save copy'" \
+  dense.png

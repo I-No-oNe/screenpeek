@@ -1,8 +1,4 @@
-//! Reading a screen: recognition from pixels, and the exact text the platform
-//! exposes through its accessibility tree.
-//!
-//! The recognition models are downloaded to the cache directory on first use
-//! rather than shipped in the binary.
+//! Read pixels with OCR and labels from platform accessibility APIs.
 
 #[cfg(target_os = "linux")]
 pub mod atspi;
@@ -10,6 +6,8 @@ pub mod atspi;
 pub mod fuse;
 #[cfg(target_os = "linux")]
 pub mod geometry;
+#[cfg(target_os = "linux")]
+mod geometry_helper;
 pub mod language;
 pub mod tesseract;
 #[cfg(windows)]
@@ -26,10 +24,10 @@ use std::sync::Mutex;
 use anyhow::{anyhow, bail, Context, Result};
 use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
 use rten::Model;
-use rten_imageproc::{bounding_rect, Rect, RotatedRect};
+use rten_imageproc::{bounding_rect, BoundingRect, Rect, RotatedRect};
 
 use crate::capture::Capture;
-use crate::index::Element;
+use crate::index::{Element, Source};
 
 const MODEL_BASE_URL: &str = "https://ocrs-models.s3-accelerate.amazonaws.com";
 const DETECTION_MODEL: &str = "text-detection.rten";
@@ -44,15 +42,59 @@ const LINE_CACHE_SIZE: usize = 4096;
 
 pub struct Engine {
     inner: OcrEngine,
-    lines: Mutex<HashMap<u64, String>>,
+    lines: Mutex<Lines>,
+}
+
+/// Keep two cache generations so overflow preserves recently reused lines.
+#[derive(Default)]
+struct Lines {
+    current: HashMap<u64, String>,
+    previous: HashMap<u64, String>,
+}
+
+impl Lines {
+    fn get(&self, key: &u64) -> Option<&String> {
+        self.current.get(key).or_else(|| self.previous.get(key))
+    }
+
+    fn extend(&mut self, additions: impl IntoIterator<Item = (u64, String)>) {
+        let additions: Vec<_> = additions.into_iter().take(LINE_CACHE_SIZE).collect();
+        if self.current.len() + additions.len() > LINE_CACHE_SIZE {
+            self.previous = std::mem::take(&mut self.current);
+        }
+        self.current.extend(additions);
+    }
+
+    #[cfg(test)]
+    fn keys(&self) -> impl Iterator<Item = &u64> {
+        self.current.keys()
+    }
+
+    #[cfg(test)]
+    fn remove(&mut self, key: &u64) {
+        self.current.remove(key);
+        self.previous.remove(key);
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.current.clear();
+        self.previous.clear();
+    }
 }
 
 impl Engine {
+    #[cfg(test)]
+    pub(crate) fn clear_cache_for_test(&self) {
+        *self.lines.lock().unwrap() = Lines::default();
+    }
+
     /// Loads the OCR models, downloading them if this is the first run.
     pub fn load() -> Result<Engine> {
-        let detection = Model::load_file(model_file(DETECTION_MODEL)?)
+        // Memory-map models; atomic file replacement keeps existing mappings valid.
+        let detection = unsafe { Model::load_mmap(model_file(DETECTION_MODEL)?) }
             .map_err(|err| anyhow!("cannot load the text detection model: {err}"))?;
-        let recognition = Model::load_file(model_file(RECOGNITION_MODEL)?)
+        let recognition = unsafe { Model::load_mmap(model_file(RECOGNITION_MODEL)?) }
             .map_err(|err| anyhow!("cannot load the text recognition model: {err}"))?;
 
         let inner = OcrEngine::new(OcrEngineParams {
@@ -64,16 +106,26 @@ impl Engine {
 
         Ok(Engine {
             inner,
-            lines: Mutex::new(HashMap::new()),
+            lines: Mutex::new(Lines::default()),
         })
     }
 
     /// Reads a capture into numbered elements in desktop coordinates.
+    #[cfg(test)]
     pub fn read(&self, capture: &Capture) -> Result<Vec<Element>> {
         self.read_scaled(capture, 1)
     }
 
+    /// Split neighboring controls at known window edges before recognition.
+    pub fn read_within(&self, capture: &Capture, edges: &[i32]) -> Result<Vec<Element>> {
+        self.read_inner(capture, 1, edges)
+    }
+
     pub fn read_scaled(&self, capture: &Capture, scale: u32) -> Result<Vec<Element>> {
+        self.read_inner(capture, scale, &[])
+    }
+
+    fn read_inner(&self, capture: &Capture, scale: u32, edges: &[i32]) -> Result<Vec<Element>> {
         let scale = scale.max(1);
         // ocrs takes RGBA as it comes, so the common path hands it the capture
         // without copying or converting anything.
@@ -101,32 +153,50 @@ impl Engine {
             .inner
             .detect_words(&input)
             .map_err(|err| anyhow!("text detection failed: {err}"))?;
-        let lines = self.inner.find_text_lines(&input, &words);
+        // Desktop coordinates on the way in, this image's pixels on the way
+        // out, so a cropped band uses the same list as a whole screen.
+        let local: Vec<f32> = edges
+            .iter()
+            .map(|edge| ((edge - capture.origin.0) * scale as i32) as f32)
+            .collect();
+        let lines = separate_controls(&self.inner.find_text_lines(&input, &words), &local);
 
         let keys: Vec<(u64, Rect)> = lines.iter().map(|line| line_key(pixels, line)).collect();
-        let unread: Vec<Vec<RotatedRect>> = lines
+        // Snapshot hits once: parallel reads and duplicate lines must not change
+        // which recognition result belongs to each missing line.
+        let cached: Vec<Option<String>> = {
+            let cache = self
+                .lines
+                .lock()
+                .map_err(|_| anyhow!("line cache lock poisoned"))?;
+            keys.iter()
+                .map(|(key, _)| cache.get(key).cloned())
+                .collect()
+        };
+        let unread: Vec<_> = lines
             .iter()
-            .zip(&keys)
-            .filter(|(_, (key, _))| !self.remembered(*key))
+            .zip(&cached)
+            .filter(|(_, text)| text.is_none())
             .map(|(line, _)| line.clone())
             .collect();
-
         let recognized = self
             .inner
             .recognize_text(&input, &unread)
             .map_err(|err| anyhow!("text recognition failed: {err}"))?;
         let mut fresh = recognized.into_iter();
-
+        let mut additions = Vec::new();
         let mut elements = Vec::new();
-        for (key, rect) in keys {
-            let text = match self.remember_or_read(key, || {
-                fresh
+        for ((key, rect), cached) in keys.into_iter().zip(cached) {
+            let text = cached.or_else(|| {
+                let text = fresh
                     .next()
                     .flatten()
-                    .map(|line| line.to_string().trim().to_owned())
-            }) {
-                Some(text) if !text.is_empty() => text,
-                _ => continue,
+                    .map(|line| line.to_string().trim().to_owned())?;
+                additions.push((key, text.clone()));
+                Some(text)
+            });
+            let Some(text) = text.filter(|text| !text.is_empty()) else {
+                continue;
             };
 
             let center = rect.center();
@@ -138,40 +208,43 @@ impl Engine {
                 y,
                 width: rect.width().max(0) as u32 / scale,
                 height: rect.height().max(0) as u32 / scale,
+                source: Source::Ocr,
             });
         }
 
+        self.lines
+            .lock()
+            .map_err(|_| anyhow!("line cache lock poisoned"))?
+            .extend(additions);
         crate::index::number(&mut elements);
         Ok(elements)
     }
 }
 
-impl Engine {
-    fn remembered(&self, key: u64) -> bool {
-        self.lines
-            .lock()
-            .map(|lines| lines.contains_key(&key))
-            .unwrap_or(false)
-    }
+/// Maximum word gap relative to text height, tuned on the dense fixture.
+const WORD_GAP_RATIO: f32 = 0.8;
+/// Fragments whose heights or vertical centres differ by more than this fraction
+/// of the taller one belong to different controls, however close they sit.
+const CONTROL_SHAPE_TOLERANCE: f32 = 0.3;
 
-    /// The text for a line, from the cache or from the reader, whichever has
-    /// it. A line that is already known does not consume a fresh reading.
-    fn remember_or_read(&self, key: u64, read: impl FnOnce() -> Option<String>) -> Option<String> {
-        let Ok(mut lines) = self.lines.lock() else {
-            return read();
-        };
-
-        if let Some(text) = lines.get(&key) {
-            return Some(text.clone());
-        }
-
-        let text = read()?;
-        if lines.len() >= LINE_CACHE_SIZE {
-            lines.clear();
-        }
-        lines.insert(key, text.clone());
-        Some(text)
-    }
+// ponytail: spacing heuristic; use accessibility boundaries when widely spaced labels need grouping.
+fn separate_controls(lines: &[Vec<RotatedRect>], edges: &[f32]) -> Vec<Vec<RotatedRect>> {
+    lines
+        .iter()
+        .flat_map(|line| {
+            line.chunk_by(|left, right| {
+                let (a, b) = (left.bounding_rect(), right.bounding_rect());
+                let tallest = left.height().max(right.height());
+                !edges
+                    .iter()
+                    .any(|edge| *edge > a.right() && *edge < b.left())
+                    && b.left() - a.right() <= WORD_GAP_RATIO * tallest
+                    && (left.height() - right.height()).abs() <= CONTROL_SHAPE_TOLERANCE * tallest
+                    && (a.center().y - b.center().y).abs() <= CONTROL_SHAPE_TOLERANCE * tallest
+            })
+            .map(<[RotatedRect]>::to_vec)
+        })
+        .collect()
 }
 
 /// A line is identified by the pixels under it, so the same line matches
@@ -188,17 +261,16 @@ fn line_key(image: &image::RgbaImage, line: &[RotatedRect]) -> (u64, Rect) {
         })
         .unwrap_or(Rect::from_tlhw(0, 0, 0, 0));
 
-    let left = rect.left().max(0) as u32;
-    let top = rect.top().max(0) as u32;
+    let left = (rect.left().max(0) as u32).min(image.width());
+    let top = (rect.top().max(0) as u32).min(image.height());
     let width = (rect.width().max(0) as u32).min(image.width().saturating_sub(left));
     let height = (rect.height().max(0) as u32).min(image.height().saturating_sub(top));
 
     let mut hasher = DefaultHasher::new();
     (width, height).hash(&mut hasher);
     for y in top..top + height {
-        for x in left..left + width {
-            image.get_pixel(x, y).0.hash(&mut hasher);
-        }
+        let start = (y as usize * image.width() as usize + left as usize) * 4;
+        image.as_raw()[start..start + width as usize * 4].hash(&mut hasher);
     }
     (hasher.finish(), rect)
 }
@@ -241,3 +313,6 @@ fn download(url: &str, path: &Path) -> Result<()> {
     fs::write(&partial, &body).with_context(|| format!("cannot write {}", partial.display()))?;
     fs::rename(&partial, path).with_context(|| format!("cannot write {}", path.display()))
 }
+
+#[cfg(test)]
+mod tests;

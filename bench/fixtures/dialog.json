@@ -1,0 +1,146 @@
+{
+  "image": "dialog.png",
+  "language": "eng",
+  "targets": [
+    {
+      "label": "Preferences",
+      "x": 24,
+      "y": 24,
+      "width": 160,
+      "height": 24
+    },
+    {
+      "label": "Appearance",
+      "x": 24,
+      "y": 64,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "Theme",
+      "x": 24,
+      "y": 94,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "Automatic",
+      "x": 200,
+      "y": 94,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "Accent colour",
+      "x": 24,
+      "y": 124,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "Blue",
+      "x": 200,
+      "y": 124,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "Editor",
+      "x": 24,
+      "y": 164,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "Font family",
+      "x": 24,
+      "y": 194,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "JetBrains Mono",
+      "x": 200,
+      "y": 194,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "Font size",
+      "x": 24,
+      "y": 224,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "13",
+      "x": 200,
+      "y": 224,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "Tab width",
+      "x": 24,
+      "y": 254,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "4 spaces",
+      "x": 200,
+      "y": 254,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "Privacy",
+      "x": 24,
+      "y": 294,
+      "width": 150,
+      "height": 24
+    },
+    {
+      "label": "Send usage statistics",
+      "x": 24,
+      "y": 324,
+      "width": 300,
+      "height": 24
+    },
+    {
+      "label": "Check for updates automatically",
+      "x": 24,
+      "y": 354,
+      "width": 400,
+      "height": 24
+    },
+    {
+      "label": "Restore previous session on launch",
+      "x": 24,
+      "y": 384,
+      "width": 400,
+      "height": 24
+    },
+    {
+      "label": "Cancel",
+      "x": 560,
+      "y": 480,
+      "width": 100,
+      "height": 34
+    },
+    {
+      "label": "Apply",
+      "x": 680,
+      "y": 480,
+      "width": 100,
+      "height": 34
+    },
+    {
+      "label": "Save",
+      "x": 800,
+      "y": 480,
+      "width": 76,
+      "height": 34
+    }
+  ]
+}

@@ -1,9 +1,12 @@
 //! screenpeek: read the screen as numbered text, then click it by name.
 
+mod caller;
 mod capture;
 mod daemon;
 mod index;
 mod pointer;
+#[cfg(target_os = "linux")]
+mod portal;
 mod read;
 
 use std::path::PathBuf;
@@ -58,10 +61,17 @@ enum Command {
     },
 
     /// Type text into whatever has focus
-    Type { text: String },
+    Type {
+        /// Leading dashes are part of the text, not flags
+        #[arg(allow_hyphen_values = true)]
+        text: String,
+    },
 
-    /// Press a key or a combination, such as ctrl+s
-    Key { combination: String },
+    /// Press a key or a combination, such as ctrl+s, super+2 or slash
+    Key {
+        #[arg(allow_hyphen_values = true)]
+        combination: String,
+    },
 
     /// Run several steps against one scan: click, type, key, wait
     Run {
@@ -76,8 +86,16 @@ enum Command {
     /// Keep the models loaded in the background, so later commands are faster
     Serve,
 
+    /// List installed Tesseract text recognition languages
+    Languages,
+
     /// Say whether a daemon is running
     Status,
+
+    /// Capture once through the desktop portal, for checking GNOME and KDE
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    Portal,
 
     /// List what the accessibility tree reports, window by window
     #[cfg(target_os = "linux")]
@@ -87,12 +105,12 @@ enum Command {
     Read {
         path: PathBuf,
 
-        /// Magnify before reading. Measured to lower accuracy, see BENCHMARK.md
-        #[arg(long, default_value_t = 1, value_name = "N")]
+        /// Magnify before reading (1–4); can help small text, costs more time
+        #[arg(long, default_value_t = 1, value_name = "N", value_parser = clap::value_parser!(u32).range(1..=4))]
         scale: u32,
 
         /// Read this language with tesseract instead of the built-in model
-        #[arg(long, value_name = "CODE")]
+        #[arg(long, value_name = "CODE", env = "SCREENPEEK_LANG")]
         lang: Option<String>,
 
         #[arg(long)]
@@ -128,10 +146,8 @@ struct Area {
     #[arg(long, conflicts_with_all = ["region", "monitor"])]
     focused: bool,
 
-    /// Read this language instead of English, for example deu, heb, chi_sim,
-    /// or `auto` to work it out from the screen and the session's locale.
-    /// Needs tesseract and that language's data installed
-    #[arg(long, value_name = "CODE")]
+    /// Tesseract language code, CODE+CODE, auto, or all (also SCREENPEEK_LANG)
+    #[arg(long, value_name = "CODE", env = "SCREENPEEK_LANG")]
     lang: Option<String>,
 }
 
@@ -186,9 +202,10 @@ fn main() -> Result<()> {
             fresh,
             area,
         } => {
+            let mut pointer = Pointer::new()?;
             let snapshot = resolve(&target, fresh, &area)?;
             let element = snapshot.find(&target)?;
-            Pointer::new()?.click(element.x, element.y, button, if double { 2 } else { 1 })?;
+            pointer.click(element.x, element.y, button, if double { 2 } else { 1 })?;
             println!("{element}");
         }
 
@@ -214,7 +231,21 @@ fn main() -> Result<()> {
             eprintln!("{} window(s) in {}ms", windows.len(), elapsed.as_millis());
         }
 
+        Command::Languages => println!("{}", read::tesseract::installed()?.join("\n")),
+
         Command::Status => println!("{}", daemon::endpoint_summary()?),
+
+        #[cfg(target_os = "linux")]
+        Command::Portal => {
+            let started = std::time::Instant::now();
+            let capture = capture::portal::Portal::new()?.capture()?;
+            println!(
+                "portal capture {}x{} in {}ms",
+                capture.image.width(),
+                capture.image.height(),
+                started.elapsed().as_millis()
+            );
+        }
 
         Command::Read {
             path,
@@ -227,7 +258,7 @@ fn main() -> Result<()> {
                 .into_rgba8();
             let capture = capture::Capture::from_image(image);
             let elements = match resolve_language(lang.as_deref())? {
-                Some(language) => read::tesseract::read(&capture, &language)?,
+                Some(language) => read::tesseract::read_scaled(&capture, &language, scale)?,
                 None => read::Engine::load()?.read_scaled(&capture, scale)?,
             };
             print(&elements.iter().collect::<Vec<_>>(), json)?;
@@ -239,9 +270,9 @@ fn main() -> Result<()> {
             fresh,
             area,
         } => {
+            let mut pointer = Pointer::new()?;
             let snapshot = resolve(&target, fresh, &area)?;
             let element = snapshot.find(&target)?;
-            let mut pointer = Pointer::new()?;
             pointer.click(element.x, element.y, Button::Left, 1)?;
             pointer.wait_for_focus();
             pointer.type_text(&text)?;
@@ -252,9 +283,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Control tree where the platform has one, daemon when it runs, else OCR.
-/// Runs a sequence of steps against one scan, rescanning only when a step
-/// cannot be answered from what is already known.
+/// Read through the platform tree, daemon, or direct OCR.
 fn run(steps: &[String], area: &Area) -> Result<()> {
     let mut pointer = Pointer::new()?;
     let mut snapshot: Option<Snapshot> = None;
@@ -290,8 +319,14 @@ fn run(steps: &[String], area: &Area) -> Result<()> {
                 }
                 snapshot = None;
             }
-            "type" => pointer.type_text(argument)?,
-            "key" => pointer.press(argument)?,
+            "type" => {
+                pointer.type_text(argument)?;
+                snapshot = None;
+            }
+            "key" => {
+                pointer.press(argument)?;
+                snapshot = None;
+            }
             other => anyhow::bail!("unknown step {other:?} in {step:?}"),
         }
     }
@@ -302,20 +337,28 @@ fn run(steps: &[String], area: &Area) -> Result<()> {
 fn scan(area: &Area) -> Result<Vec<Element>> {
     let region = area.region()?;
     let language = resolve_language(area.lang.as_deref())?;
-    let elements = match controls(area) {
+    let excluded = caller::regions();
+    let mut elements = match controls(area) {
         Some(elements) => elements,
-        None => match daemon::ask(region, area.monitor, language.clone()) {
+        None => match daemon::ask(region, area.monitor, language.clone(), excluded.clone()) {
             Some(elements) => elements,
             None => {
-                let capture = capture::screen(area.monitor, region)?;
+                let mut capture = capture::screen(area.monitor, region)?;
+                capture.exclude(&excluded);
                 let recognized = match &language {
                     Some(language) => read::tesseract::read(&capture, language)?,
-                    None => read::Engine::load()?.read(&capture)?,
+                    None => read::Engine::load()?.read_within(&capture, &window_edges())?,
                 };
                 with_tree_text(recognized)
             }
         },
     };
+    // Clip all results before numbering and caching so scoped clicks stay inside the region.
+    if let Some(region) = region {
+        elements.retain(|element| region.contains(element.x, element.y));
+        index::number(&mut elements);
+    }
+    caller::filter(&mut elements, &excluded);
     Snapshot::new(elements.clone())
         .save()
         .context("cannot cache this scan")?;
@@ -324,32 +367,48 @@ fn scan(area: &Area) -> Result<Vec<Element>> {
 
 /// A snapshot that can answer `target`, scanning again only when needed.
 fn resolve(target: &str, fresh: bool, area: &Area) -> Result<Snapshot> {
-    if !fresh {
-        if let Some(snapshot) = Snapshot::load() {
+    if !fresh && area.region.is_none() && area.monitor.is_none() && !area.focused {
+        if let Some(mut snapshot) = Snapshot::load() {
+            caller::filter(&mut snapshot.elements, &caller::regions());
             if snapshot.can_resolve(target) {
                 return Ok(snapshot);
             }
         }
     }
+
     Ok(Snapshot::new(scan(area)?))
 }
 
-/// Turns `--lang` into the languages to read with, checking that tesseract has
-/// them. `auto` looks at the text the accessibility tree already gives and at
-/// the session's locale, and comes back empty when English is all that is
-/// needed, since the built-in model reads that faster.
+/// Validate languages and use locale or accessible text for auto-selection.
 fn resolve_language(requested: Option<&str>) -> Result<Option<String>> {
     let Some(requested) = requested else {
         return Ok(None);
     };
 
+    let installed = read::tesseract::installed()?;
+
+    // Include English for mixed-language labels when its model is installed.
+    if requested == "all" {
+        return Ok(Some(read::language::every(&installed)));
+    }
     if requested != "auto" {
         read::tesseract::supports(requested)?;
-        return Ok(Some(requested.to_owned()));
+        return Ok(Some(read::language::with_english(requested, &installed)));
     }
 
-    let installed = read::tesseract::installed()?;
     Ok(read::language::detect(&known_text(), &installed))
+}
+
+/// Where the compositor says windows end, so recognition can tell neighbouring
+/// controls apart. Nothing to offer when there is no compositor to ask.
+#[cfg(target_os = "linux")]
+fn window_edges() -> Vec<i32> {
+    read::geometry::edges()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn window_edges() -> Vec<i32> {
+    Vec::new()
 }
 
 /// Text the platform hands over without recognition, which is what the
@@ -369,6 +428,7 @@ fn known_text() -> Vec<Element> {
             y: item.y,
             width: item.width,
             height: item.height,
+            source: index::Source::Tree,
         })
         .collect()
 }
@@ -383,9 +443,7 @@ fn known_text() -> Vec<Element> {
     Vec::new()
 }
 
-/// Replaces what was recognized with what the accessibility tree says, using
-/// the compositor's window positions where it answers and matched labels where
-/// it does not.
+/// Place tree labels using compositor geometry or matching OCR text.
 #[cfg(target_os = "linux")]
 fn with_tree_text(elements: Vec<Element>) -> Vec<Element> {
     let Ok(windows) = read::atspi::windows() else {
@@ -401,22 +459,16 @@ fn with_tree_text(elements: Vec<Element>) -> Vec<Element> {
 
     let located = read::fuse::place(&windows, &placements);
     if located.is_empty() {
-        return read::fuse::fuse(elements, &windows);
+        return elements;
     }
 
-    let mut merged: Vec<Element> = elements
-        .into_iter()
-        .filter(|element| {
-            !located
-                .iter()
-                .any(|window| window.rect.contains(element.x, element.y))
-        })
-        .collect();
-    for window in located {
-        merged.extend(window.elements);
-    }
-    index::number(&mut merged);
-    merged
+    index::merge_tree(
+        elements,
+        located
+            .into_iter()
+            .flat_map(|window| window.elements)
+            .collect(),
+    )
 }
 
 #[cfg(not(target_os = "linux"))]

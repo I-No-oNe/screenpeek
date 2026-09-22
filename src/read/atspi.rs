@@ -1,11 +1,4 @@
-//! The Linux accessibility tree.
-//!
-//! Toolkits publish their controls on the AT-SPI bus with exact text, in
-//! whatever language the interface is in. Under Wayland the coordinates that
-//! come with them are useless, since a client is not told where it sits, so a GTK4
-//! window reports `0 0 749 840` wherever it actually is. Only the text and
-//! the shape of each window are taken from here. Positions come from the
-//! pixels, and `fuse` puts the two together.
+//! Read AT-SPI labels and window-relative rectangles.
 
 use std::time::{Duration, Instant};
 
@@ -50,9 +43,7 @@ pub fn windows() -> Result<Vec<Window>> {
     windows_where(|_| true)
 }
 
-/// The same, but only walking the contents of the windows the caller still
-/// wants. A window it skips comes back with its title and size and no items,
-/// so the caller can keep whatever it already had for it.
+/// Return window metadata for skipped trees so cached items can be reused.
 pub fn windows_where(wanted: impl Fn(&Window) -> bool + Sync) -> Result<Vec<Window>> {
     let bus = address().context("no accessibility bus")?;
     let connection = Builder::address(bus.as_str())?.build()?;

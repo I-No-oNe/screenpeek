@@ -1,6 +1,4 @@
-//! Windows UI Automation. Control names and rectangles come straight from the
-//! platform, so nothing is recognized and nothing is guessed. Recognition is
-//! the fallback for windows that expose no tree.
+//! Read Windows UI Automation labels and rectangles before falling back to OCR.
 
 use anyhow::{anyhow, Result};
 use uiautomation::types::TreeScope;
@@ -47,6 +45,7 @@ fn readable(element: &UIElement) -> Option<Element> {
         y: rect.get_top() + rect.get_height() / 2,
         width: rect.get_width() as u32,
         height: rect.get_height() as u32,
+        source: crate::index::Source::Tree,
     })
 }
 
@@ -55,11 +54,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires an interactive Windows desktop"]
     fn the_desktop_tree_reads_as_clickable_elements() {
-        let Ok(elements) = elements() else {
-            // A session without an interactive desktop has no tree to read.
-            return;
-        };
+        let elements = elements().expect("UI Automation must be available");
         assert!(!elements.is_empty(), "a desktop always has a named control");
 
         for pair in elements.windows(2) {

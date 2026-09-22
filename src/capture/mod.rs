@@ -1,6 +1,8 @@
 //! Screen capture in virtual-desktop coordinates, the space the pointer uses.
 
 #[cfg(target_os = "linux")]
+pub mod portal;
+#[cfg(target_os = "linux")]
 pub mod wayland;
 #[cfg(target_os = "linux")]
 pub mod x11;
@@ -16,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use xcap::Monitor;
 
 /// A rectangle on the virtual desktop.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Region {
     pub x: i32,
     pub y: i32,
@@ -76,6 +78,25 @@ impl Capture {
         }
     }
 
+    /// Mask excluded windows before comparing frames or recognizing text.
+    pub fn exclude(&mut self, regions: &[Region]) {
+        for region in regions {
+            let x = (i64::from(region.x) - i64::from(self.origin.0))
+                .clamp(0, i64::from(self.image.width())) as u32;
+            let y = (i64::from(region.y) - i64::from(self.origin.1))
+                .clamp(0, i64::from(self.image.height())) as u32;
+            let right = (i64::from(region.x) + i64::from(region.width) - i64::from(self.origin.0))
+                .clamp(0, i64::from(self.image.width())) as u32;
+            let bottom = (i64::from(region.y) + i64::from(region.height) - i64::from(self.origin.1))
+                .clamp(0, i64::from(self.image.height())) as u32;
+            for row in y..bottom {
+                for col in x..right {
+                    self.image.put_pixel(col, row, image::Rgba([0, 0, 0, 255]));
+                }
+            }
+        }
+    }
+
     /// Translates a point inside the captured image to desktop coordinates.
     pub fn to_desktop(&self, x: i32, y: i32) -> (i32, i32) {
         (self.origin.0 + x, self.origin.1 + y)
@@ -89,41 +110,92 @@ pub fn screen(monitor: Option<usize>, region: Option<Region>) -> Result<Capture>
     let Some(region) = region else {
         return Ok(full);
     };
-    Ok(crop(full, region))
+    crop(full, region)
 }
 
 /// Narrows a capture to a region, clamped to what was captured.
-fn crop(capture: Capture, region: Region) -> Capture {
-    let x = (region.x - capture.origin.0).max(0) as u32;
-    let y = (region.y - capture.origin.1).max(0) as u32;
-    let width = region.width.min(capture.image.width().saturating_sub(x));
-    let height = region.height.min(capture.image.height().saturating_sub(y));
-    if width == 0 || height == 0 {
-        return capture;
+pub(crate) fn crop(capture: Capture, region: Region) -> Result<Capture> {
+    let left = i64::from(region.x).max(i64::from(capture.origin.0));
+    let top = i64::from(region.y).max(i64::from(capture.origin.1));
+    let right = (i64::from(region.x) + i64::from(region.width))
+        .min(i64::from(capture.origin.0) + i64::from(capture.image.width()));
+    let bottom = (i64::from(region.y) + i64::from(region.height))
+        .min(i64::from(capture.origin.1) + i64::from(capture.image.height()));
+    if right <= left || bottom <= top {
+        bail!("region does not intersect the captured monitor");
+    }
+    let x = (left - i64::from(capture.origin.0)) as u32;
+    let y = (top - i64::from(capture.origin.1)) as u32;
+    let width = (right - left) as u32;
+    let height = (bottom - top) as u32;
+    if x == 0 && y == 0 && (width, height) == capture.image.dimensions() {
+        return Ok(capture);
+    }
+    Ok(Capture {
+        image: image::imageops::crop_imm(&capture.image, x, y, width, height).to_image(),
+        origin: (left as i32, top as i32),
+    })
+}
+
+#[cfg(target_os = "linux")]
+pub enum Backend {
+    Wayland(wayland::Screencopy),
+    X11(x11::Screen),
+    Portal,
+}
+
+#[cfg(target_os = "linux")]
+impl Backend {
+    pub fn new() -> Result<Self> {
+        if std::env::var("SCREENPEEK_CAPTURE").as_deref() == Ok("portal") {
+            return Ok(Self::Portal);
+        }
+        match wayland::Screencopy::new() {
+            Ok(screencopy) => Ok(Self::Wayland(screencopy)),
+            Err(_) if wayland::logical_desktop().is_some() => Ok(Self::Portal),
+            Err(wayland_error) => x11::Screen::new()
+                .map(Self::X11)
+                .map_err(|error| anyhow!("{wayland_error}; and {error}")),
+        }
     }
 
-    Capture {
-        image: image::imageops::crop_imm(&capture.image, x, y, width, height).to_image(),
-        origin: (capture.origin.0 + x as i32, capture.origin.1 + y as i32),
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Wayland(_) => "wlr-screencopy",
+            Self::X11(_) => "x11",
+            Self::Portal => "portal",
+        }
+    }
+
+    pub fn capture(&mut self, monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
+        let full = match self {
+            Self::Wayland(screencopy) => match region {
+                Some(region) => screencopy.capture_containing(region),
+                None => screencopy.capture(monitor),
+            },
+            Self::X11(screen) => match region {
+                Some(region) => screen.capture_containing(region),
+                None => screen.capture(monitor),
+            },
+            Self::Portal => {
+                if monitor.is_some() {
+                    bail!(
+                        "portal capture uses the whole desktop; use --region instead of --monitor"
+                    );
+                }
+                portal::Portal::new()?.capture()
+            }
+        }?;
+        match region {
+            Some(region) => crop(full, region),
+            None => Ok(full),
+        }
     }
 }
 
 #[cfg(target_os = "linux")]
 fn full_screen(monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
-    match wayland::Screencopy::new() {
-        Ok(mut screencopy) => match region {
-            Some(region) => screencopy.capture_containing(region),
-            None => screencopy.capture(monitor),
-        },
-        Err(wayland_error) => {
-            let mut screen = x11::Screen::new()
-                .map_err(|x11_error| anyhow!("{wayland_error}; and {x11_error}"))?;
-            match region {
-                Some(region) => screen.capture_containing(region),
-                None => screen.capture(monitor),
-            }
-        }
-    }
+    Backend::new()?.capture(monitor, region)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -210,5 +282,62 @@ mod tests {
         assert!(region.contains(9, 9));
         assert!(!region.contains(10, 10));
         assert!(!region.contains(-1, 5));
+    }
+    #[test]
+    fn crops_are_intersections_in_desktop_coordinates() {
+        let capture = || Capture {
+            image: RgbaImage::new(100, 80),
+            origin: (-50, 20),
+        };
+        let clipped = crop(
+            capture(),
+            Region {
+                x: -60,
+                y: 10,
+                width: 40,
+                height: 40,
+            },
+        )
+        .unwrap();
+        assert_eq!(clipped.origin, (-50, 20));
+        assert_eq!(clipped.image.dimensions(), (30, 30));
+        let clipped = crop(
+            capture(),
+            Region {
+                x: 30,
+                y: 90,
+                width: 50,
+                height: 50,
+            },
+        )
+        .unwrap();
+        assert_eq!(clipped.origin, (30, 90));
+        assert_eq!(clipped.image.dimensions(), (20, 10));
+        assert!(crop(
+            capture(),
+            Region {
+                x: 50,
+                y: 20,
+                width: 10,
+                height: 10
+            }
+        )
+        .is_err());
+    }
+    #[test]
+    fn exclusion_masks_only_the_intersection_on_a_negative_origin_monitor() {
+        let mut capture = Capture {
+            image: RgbaImage::from_pixel(4, 4, image::Rgba([255; 4])),
+            origin: (-10, -10),
+        };
+        capture.exclude(&[Region {
+            x: -12,
+            y: -12,
+            width: 4,
+            height: 4,
+        }]);
+        assert_eq!(capture.image.get_pixel(0, 0).0, [0, 0, 0, 255]);
+        assert_eq!(capture.image.get_pixel(1, 1).0, [0, 0, 0, 255]);
+        assert_eq!(capture.image.get_pixel(2, 2).0, [255; 4]);
     }
 }

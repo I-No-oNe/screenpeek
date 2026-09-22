@@ -1,34 +1,43 @@
 name: Benchmark
-
 on:
   push:
     branches: [main]
-    paths:
-      - src/**
-      - bench/**
-      - Cargo.toml
+  pull_request:
   workflow_dispatch:
-
 jobs:
   recognition:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config imagemagick
+      - run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config tesseract-ocr tesseract-ocr-eng
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release
-
-      - name: Recognition accuracy and speed
+      - run: cargo build --release --locked
+      - name: CLI accuracy and process latency
+        run: python3 bench/measure.py --max-ms 10000 | tee benchmark.json
+      - name: Tesseract with a model-only data directory
         run: |
-          {
-            echo "## Recognition on bench/fixtures/dialog.png"
-            echo
-            bench/accuracy.sh
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Fail if recall drops
+          mkdir -p "$RUNNER_TEMP/screenpeek-tessdata"
+          cp /usr/share/tesseract-ocr/5/tessdata/eng.traineddata "$RUNNER_TEMP/screenpeek-tessdata/"
+          TESSDATA_PREFIX="$RUNNER_TEMP/screenpeek-tessdata" python3 bench/measure.py --fixture bench/fixtures/eng.png --lang eng --max-ms 10000
+      - name: Compare engines on the same labelled targets
         run: |
-          recall=$(bench/accuracy.sh | awk -F'|' '/\| 1x \|/ { gsub(/[^0-9]/, "", $4); print $4 }')
-          echo "recall at 1x: ${recall}%"
-          [ "${recall:-0}" -ge 90 ] || { echo "recall fell below 90%" >&2; exit 1; }
+          python3 -m doctest bench/compare_tools.py
+          python3 bench/compare_tools.py --runs 3
+      - name: Repeated and concurrent OCR correctness and latency
+        env:
+          SCREENPEEK_MAX_WARM_MS: 5000
+        run: cargo test --release --bin screenpeek -- --ignored --nocapture --test-threads=1 --skip window_edges_come_back_from_the_compositor
+      - name: Token counts and latency scenarios (estimates)
+        run: |
+          python3 -m pip install tiktoken==0.14.0
+          python3 -m doctest bench/compare.py
+          python3 bench/compare.py > comparison.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark
+          path: |
+            benchmark.json
+            target/scenarios.json
+            target/compare.json
+            comparison.json

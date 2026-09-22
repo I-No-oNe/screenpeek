@@ -1,15 +1,9 @@
-//! Putting the accessibility tree and a window's position together.
-//!
-//! The tree knows what every control says but not where its window sits. The
-//! compositor knows exactly where it sits, so `place` joins the two and every
-//! control gets a real position without anything being recognized. Where the
-//! compositor cannot be asked, `fuse` works the offset out from labels that
-//! recognition and the tree agree on.
+//! Place accessibility labels using window geometry or matching OCR text.
 
 use super::atspi::Window;
 use super::geometry::Placement;
 use crate::capture::Region;
-use crate::index::{self, Element};
+use crate::index::{self, Element, Source};
 
 /// How far two matched labels may disagree about the offset, in pixels.
 const OFFSET_TOLERANCE: i32 = 6;
@@ -21,41 +15,52 @@ const MIN_ANCHORS: usize = 2;
 pub struct Placed {
     pub rect: Region,
     pub elements: Vec<Element>,
+    /// How the window is remembered between looks: its title and size, the
+    /// same key the tree cache uses.
+    pub key: Option<(String, u32, u32)>,
 }
 
-/// Joins the tree to the compositor's window list. A window is matched on its
-/// title and size, then on either alone, since a title can repeat and a size
-/// can be shared.
+/// Resolve a unique window; equal-size windows with different titles are not interchangeable.
+pub fn placement_index(window: &Window, placements: &[Placement]) -> Option<usize> {
+    let candidates: Vec<_> = placements
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            let same_title = candidate.title == window.title;
+            let same_size = candidate.width == window.width && candidate.height == window.height;
+            let score = if same_title && !window.title.is_empty() {
+                2 + u8::from(same_size)
+            } else if same_size && (window.title.is_empty() || candidate.title.is_empty()) {
+                1
+            } else {
+                0
+            };
+            (score > 0).then_some((index, score))
+        })
+        .collect();
+    let best = candidates.iter().map(|(_, score)| *score).max()?;
+    let mut matches = candidates.iter().filter(|(_, score)| *score == best);
+    let first = matches.next()?.0;
+    matches.next().is_none().then_some(first)
+}
+
+/// Match each tree to one window by title and size, then either alone.
 pub fn place(windows: &[Window], placements: &[Placement]) -> Vec<Placed> {
     let mut taken = vec![false; placements.len()];
     let mut placed = Vec::new();
 
-    for window in windows {
-        let matched = (0..placements.len())
-            .filter(|index| !taken[*index])
-            .max_by_key(|index| {
-                let candidate = &placements[*index];
-                let same_title = candidate.title == window.title;
-                let same_size =
-                    candidate.width == window.width && candidate.height == window.height;
-                match (same_title, same_size) {
-                    (true, true) => 3,
-                    (true, false) => 2,
-                    (false, true) => 1,
-                    (false, false) => 0,
-                }
-            })
-            .filter(|index| {
-                let candidate = &placements[*index];
-                candidate.title == window.title
-                    || (candidate.width == window.width && candidate.height == window.height)
-            });
-
-        let Some(index) = matched else { continue };
+    for window in windows.iter().filter(|window| !window.items.is_empty()) {
+        let Some(index) = placement_index(window, placements) else {
+            continue;
+        };
+        if taken[index] {
+            continue;
+        }
         taken[index] = true;
         let placement = &placements[index];
 
         placed.push(Placed {
+            key: Some((window.title.clone(), window.width, window.height)),
             rect: Region {
                 x: placement.x,
                 y: placement.y,
@@ -72,6 +77,7 @@ pub fn place(windows: &[Window], placements: &[Placement]) -> Vec<Placed> {
                     y: placement.y + item.y + item.height as i32 / 2,
                     width: item.width,
                     height: item.height,
+                    source: Source::Tree,
                 })
                 .collect(),
         });
@@ -82,14 +88,12 @@ pub fn place(windows: &[Window], placements: &[Placement]) -> Vec<Placed> {
 
 pub fn fuse(recognized: Vec<Element>, windows: &[Window]) -> Vec<Element> {
     let mut placed: Vec<Element> = Vec::new();
-    let mut covered: Vec<(i32, i32, u32, u32)> = Vec::new();
 
-    for window in windows {
+    for window in windows.iter().filter(|window| !window.items.is_empty()) {
         let Some((dx, dy)) = offset(&recognized, window) else {
             continue;
         };
 
-        covered.push((dx, dy, window.width, window.height));
         for item in &window.items {
             placed.push(Element {
                 id: 0,
@@ -98,25 +102,12 @@ pub fn fuse(recognized: Vec<Element>, windows: &[Window]) -> Vec<Element> {
                 y: item.y + dy + item.height as i32 / 2,
                 width: item.width,
                 height: item.height,
+                source: Source::Tree,
             });
         }
     }
 
-    let mut elements: Vec<Element> = recognized
-        .into_iter()
-        .filter(|element| {
-            !covered.iter().any(|(x, y, width, height)| {
-                element.x >= *x
-                    && element.y >= *y
-                    && element.x < x + *width as i32
-                    && element.y < y + *height as i32
-            })
-        })
-        .collect();
-
-    elements.append(&mut placed);
-    index::number(&mut elements);
-    elements
+    index::merge_tree(recognized, placed)
 }
 
 /// Where this window sits on screen, from the labels that recognition and the
@@ -180,6 +171,7 @@ mod tests {
             y,
             width: 40,
             height: 12,
+            source: Source::Ocr,
         }
     }
 
@@ -201,6 +193,7 @@ mod tests {
             width: 800,
             height: 600,
             focused: false,
+            pid: None,
         }
     }
 
@@ -298,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn each_window_is_matched_at_most_once() {
+    fn indistinguishable_windows_are_not_assigned_arbitrary_positions() {
         let first = window(vec![item("One", 0, 0)]);
         let second = window(vec![item("Two", 0, 0)]);
         let placed = place(
@@ -306,8 +299,13 @@ mod tests {
             &[placement("Files", 0, 0), placement("Files", 900, 0)],
         );
 
-        assert_eq!(placed.len(), 2);
-        assert_ne!(placed[0].rect.x, placed[1].rect.x);
+        assert!(placed.is_empty());
+    }
+
+    #[test]
+    fn hidden_tree_cannot_claim_a_visible_window_of_the_same_size() {
+        let tree = window(vec![item("Documents", 0, 0)]);
+        assert!(place(&[tree], &[placement("Editor", 0, 0)]).is_empty());
     }
 
     #[test]
@@ -316,5 +314,9 @@ mod tests {
         let fused = fuse(recognized, &[]);
         assert_eq!(fused.len(), 1);
         assert_eq!(fused[0].text, "Save");
+    }
+    #[test]
+    fn empty_accessibility_windows_do_not_hide_ocr_text() {
+        assert!(place(&[window(Vec::new())], &[placement("Files", 0, 0)]).is_empty());
     }
 }
