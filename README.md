@@ -30,16 +30,16 @@ One binary, no runtime dependencies. The OCR models (12 MB) download to the cach
 
 Linux builds need `libwayland-dev` and `libxkbcommon-dev` (or your distribution's equivalents) at compile time.
 
-Linux talks to wlroots compositors directly: `wlr-screencopy` for capture, `wlr-virtual-pointer` and `virtual-keyboard` for input. Hyprland, Sway, river and Wayfire have all three. Window positions come from the compositor's own IPC, which Hyprland and Sway answer; on the others screenpeek works the position out from the pixels instead. GNOME, KDE and X11 are not supported on Linux; Windows is.
+Linux works on Wayland and on X11. On Wayland it uses `wlr-screencopy` for capture and `wlr-virtual-pointer` with `virtual-keyboard` for input, which Hyprland, Sway, river and Wayfire all have; on X11 it reads the root window and drives the pointer through X. Window positions come from Hyprland's IPC, Sway's i3 protocol, or X11's window properties. Anywhere else, the position is worked out from the pixels instead. GNOME, KDE and X11 are not supported on Linux; Windows is.
 
 ## Runtime design
 
 ```text
 Windows ─── UI Automation ─── exact text + screen rectangles ─── elements
 
-Linux ───┬─ AT-SPI ────────── exact text, no position ────────┐
-         ├─ compositor IPC ── window positions ───────────────┼─ joined
-         └─ wlr-screencopy ── OCR for whatever is left over ──┘
+Linux ───┬─ AT-SPI ──────────────── exact text, no position ──┐
+         ├─ Hyprland / Sway / X11 ─ window positions ─────────┼─ joined
+         └─ screencopy or X11 ───── OCR for what is left over ┘
 
 Any platform ─── enigo ─── pointer and keyboard
 ```
@@ -53,7 +53,7 @@ A running daemon keeps the models loaded, keeps the last frame, and re-reads onl
 ## Commands
 
 ```
-screenpeek scan   [--grep TEXT] [--region X,Y,W,H] [--monitor N] [--focused] [--json]
+screenpeek scan   [--grep TEXT] [--region X,Y,W,H] [--monitor N] [--focused] [--lang CODE] [--json]
 screenpeek click  <id|text> [--button left|right|middle] [--double] [--fresh]
 screenpeek type   <text>
 screenpeek key    <combination>
@@ -62,7 +62,7 @@ screenpeek run    <step>...
 screenpeek serve
 screenpeek status
 screenpeek tree
-screenpeek read   <image> [--scale N] [--json]
+screenpeek read   <image> [--scale N] [--lang CODE] [--json]
 ```
 
 `scan` prints `id text @x,y`, where `x,y` is the centre of the text on the virtual desktop, the point a click lands on. `--json` adds each element's size.
@@ -111,7 +111,7 @@ cp -r skill/screenpeek skill/screenpeek-drive ~/.claude/skills/
 ## Limits
 
 - Text only, where there is no control tree. An unlabelled icon is invisible to recognition.
-- Languages other than English work through the accessibility tree; where a window exposes none, recognition is English.
+- Languages other than English come free through the accessibility tree. Where a window exposes none, `--lang` hands the pixels to tesseract, which is slower than the built-in reader.
 - Linux accessibility (AT-SPI) is not used: under Wayland a client is not told where it sits on screen, so the extents it reports cannot be clicked. [BENCHMARK.md](BENCHMARK.md) has the measurement.
 - The cache holds one scan per user.
 

@@ -25,8 +25,10 @@ comes first.
 | Recognition, 900x560 dialog, 20 labels | 336 ms |
 | Recognition, 1920x1080 text-dense screen | 1,700-3,000 ms |
 | Recognition, changed areas only | 145-210 ms |
-| Repeat look, nothing changed | 12-16 ms |
+| Repeat look, nothing changed | 13-14 ms |
 | Reading one located window, no recognition at all | 0 ms |
+| Accessibility tree walk, skipped for an unchanged window | 0 ms |
+| One look in another language, through tesseract | 187 ms for a 900x560 dialog |
 
 Recognition is now the whole cost. It scales with how much text is on screen,
 not with area: half the screen took 1,679 ms against 1,739 ms for all of it,
@@ -68,14 +70,46 @@ only what the user is actually looking at.
 and remembered, so a line that has been read before is not read again wherever
 it has moved to. Patched reads went from 320-430 ms to 145-210 ms.
 
-## Worth trying next, most promising first
+**The tree walk skipped for windows that did not change.** Walking one window
+costs 86-94 ms of D-Bus conversation. The daemon now keeps each window's items
+and only walks again when that window's pixels moved, so a repeat look at a
+settled screen costs 13 ms end to end, down from 151 ms.
 
-**river and Wayfire.** Neither reports window geometry, so they keep the
-label-matching fallback. Hyprland and Sway are asked directly.
+**Windows walked at the same time.** Each window is a separate conversation
+with a separate application, so they run together rather than one after
+another. With one window open this changes nothing; with six it is the
+difference between one wait and six.
+
+**The capture handed to the reader without conversion.** ocrs takes RGBA as it
+comes, so the frame is no longer copied into an RGB buffer on every read.
+
+**X11 capture.** X11 sessions keep one connection open and read the root
+window, the same shape as the Wayland path, so they get the same incremental
+behaviour rather than falling back to a fresh session per frame.
+
+## Worth trying next, most promising first
 
 **Detection as well as recognition, skipped for located windows.** Detection
 still runs over the whole capture even where every window is described by its
-tree. Cropping the input to the uncovered rectangles would remove that too.
+tree. Cropping the input to the uncovered rectangles would remove that too, and
+it is the largest remaining item on a first look at a busy screen.
+
+**A first look that is not a full read.** Everything above makes a repeat look
+cheap; the first one still reads the whole screen at 1.8-2.0 s. Reading the
+focused window first and the rest in the background would make the answer that
+matters arrive in about 400 ms.
+
+**Tesseract kept running.** `--lang` spawns a process per look. Tesseract can
+be driven as a long-lived child, which would take the 187 ms dialog read down
+by whatever the process start costs.
+
+**river and Wayfire.** Neither reports window geometry, so they keep the
+label-matching fallback. Hyprland, Sway and X11 are asked directly.
+
+**A native recognition engine.** PaddleOCR's mobile models through ONNX Runtime
+are typically several times faster than ocrs on CPU and are multilingual, which
+would also remove the tesseract dependency for `--lang`. The cost is a native
+runtime on both platforms, against the current single static binary.
 
 **A different recognition engine.** PaddleOCR's mobile models through ONNX
 Runtime are typically several times faster than ocrs on CPU, and they are

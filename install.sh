@@ -10,7 +10,7 @@ case "$(uname -s)" in
   *) echo "no prebuilt binary for $(uname -s); use: cargo install --git https://github.com/$repo" >&2; exit 1 ;;
 esac
 
-tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=1" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
 [ -n "$tag" ] || { echo "no release found" >&2; exit 1; }
 
 tmp=$(mktemp -d)
