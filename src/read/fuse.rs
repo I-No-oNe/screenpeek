@@ -6,7 +6,7 @@
 //! including the ones recognition never reads, such as an icon whose only text
 //! is its accessible name.
 
-use crate::atspi::Window;
+use super::atspi::Window;
 use crate::index::{self, Element};
 
 /// How far two matched labels may disagree about the offset, in pixels.
@@ -105,7 +105,7 @@ fn average(offsets: &[(i32, i32)]) -> (i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atspi::Item;
+    use crate::read::atspi::Item;
 
     fn element(text: &str, x: i32, y: i32) -> Element {
         Element {

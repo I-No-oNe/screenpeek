@@ -1,5 +1,8 @@
 //! Screen capture in virtual-desktop coordinates, the space the pointer uses.
 
+#[cfg(target_os = "linux")]
+pub mod wayland;
+
 use std::fmt;
 use std::str::FromStr;
 
@@ -81,7 +84,7 @@ impl Capture {
 
 /// Captures a monitor, or the part of one covered by `region`. A region is
 /// taken from the monitor it starts on, so scan coordinates can be fed back in.
-pub fn capture(monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
+pub fn screen(monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
     let full = full_screen(monitor, region)?;
     let Some(region) = region else {
         return Ok(full);
@@ -89,8 +92,8 @@ pub fn capture(monitor: Option<usize>, region: Option<Region>) -> Result<Capture
     Ok(crop(full, region))
 }
 
-/// Narrows a capture to a region, clamped to what was actually captured.
-pub fn crop(capture: Capture, region: Region) -> Capture {
+/// Narrows a capture to a region, clamped to what was captured.
+fn crop(capture: Capture, region: Region) -> Capture {
     let x = (region.x - capture.origin.0).max(0) as u32;
     let y = (region.y - capture.origin.1).max(0) as u32;
     let width = region.width.min(capture.image.width().saturating_sub(x));
@@ -107,7 +110,7 @@ pub fn crop(capture: Capture, region: Region) -> Capture {
 
 #[cfg(target_os = "linux")]
 fn full_screen(monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
-    let mut screencopy = crate::wayland::Screencopy::new()?;
+    let mut screencopy = wayland::Screencopy::new()?;
     match region {
         Some(region) => screencopy.capture_containing(region),
         None => screencopy.capture(monitor),

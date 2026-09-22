@@ -1,5 +1,15 @@
-//! Text recognition with ocrs. The models are downloaded to the cache
-//! directory on first use rather than shipped in the binary.
+//! Reading a screen: recognition from pixels, and the exact text the platform
+//! exposes through its accessibility tree.
+//!
+//! The recognition models are downloaded to the cache directory on first use
+//! rather than shipped in the binary.
+
+#[cfg(target_os = "linux")]
+pub mod atspi;
+#[cfg(target_os = "linux")]
+pub mod fuse;
+#[cfg(windows)]
+pub mod ui;
 
 use std::fs;
 use std::io::Read;
@@ -9,8 +19,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use ocrs::{ImageSource, OcrEngine, OcrEngineParams, TextItem};
 use rten::Model;
 
+use crate::capture::Capture;
 use crate::index::Element;
-use crate::screen::Capture;
 
 const MODEL_BASE_URL: &str = "https://ocrs-models.s3-accelerate.amazonaws.com";
 const DETECTION_MODEL: &str = "text-detection.rten";

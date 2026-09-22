@@ -1,6 +1,6 @@
 //! Repeated capture on wlroots compositors, holding one Wayland connection
 //! and one shared-memory buffer so a frame costs the copy and nothing else.
-//! Anything that does not speak wlr-screencopy falls back to `screen::capture`.
+//! Anything that does not speak wlr-screencopy falls back to the portable path.
 
 use std::fs::File;
 use std::os::fd::AsFd;
@@ -21,7 +21,7 @@ use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
 };
 
-use crate::screen::{Capture, Region};
+use super::{Capture, Region};
 
 /// A persistent capture session for one output.
 pub struct Screencopy {

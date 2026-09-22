@@ -1,27 +1,19 @@
 //! screenpeek: read the screen as numbered text, then click it by name.
 
-#[cfg(target_os = "linux")]
-mod atspi;
+mod capture;
 mod daemon;
-#[cfg(target_os = "linux")]
-mod fuse;
 mod index;
-mod ocr;
 mod pointer;
-mod screen;
-#[cfg(windows)]
-mod ui;
-#[cfg(target_os = "linux")]
-mod wayland;
+mod read;
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
+use capture::Region;
 use index::{Element, Snapshot};
 use pointer::{Button, Pointer};
-use screen::Region;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -170,7 +162,7 @@ fn main() -> Result<()> {
         #[cfg(target_os = "linux")]
         Command::Tree => {
             let started = std::time::Instant::now();
-            let windows = atspi::windows()?;
+            let windows = read::atspi::windows()?;
             let elapsed = started.elapsed();
             for window in &windows {
                 println!("{} ({}x{})", window.title, window.width, window.height);
@@ -187,8 +179,8 @@ fn main() -> Result<()> {
             let image = image::open(&path)
                 .with_context(|| format!("cannot open {}", path.display()))?
                 .into_rgba8();
-            let capture = screen::Capture::from_image(image);
-            let elements = ocr::Engine::load()?.read_scaled(&capture, scale)?;
+            let capture = capture::Capture::from_image(image);
+            let elements = read::Engine::load()?.read_scaled(&capture, scale)?;
             print(&elements.iter().collect::<Vec<_>>(), json)?;
         }
 
@@ -264,8 +256,8 @@ fn scan(area: &Area) -> Result<Vec<Element>> {
         None => match daemon::ask(area.region, area.monitor) {
             Some(elements) => elements,
             None => {
-                let capture = screen::capture(area.monitor, area.region)?;
-                ocr::Engine::load()?.read(&capture)?
+                let capture = capture::screen(area.monitor, area.region)?;
+                read::Engine::load()?.read(&capture)?
             }
         },
     };
@@ -292,8 +284,8 @@ fn resolve(target: &str, fresh: bool, area: &Area) -> Result<Snapshot> {
 /// windows that expose one and that enough labels place on screen.
 #[cfg(target_os = "linux")]
 fn with_tree_text(elements: Vec<Element>) -> Vec<Element> {
-    match atspi::windows() {
-        Ok(windows) if !windows.is_empty() => fuse::fuse(elements, &windows),
+    match read::atspi::windows() {
+        Ok(windows) if !windows.is_empty() => read::fuse::fuse(elements, &windows),
         _ => elements,
     }
 }
@@ -305,7 +297,7 @@ fn with_tree_text(elements: Vec<Element>) -> Vec<Element> {
 
 #[cfg(windows)]
 fn controls(area: &Area) -> Option<Vec<Element>> {
-    let elements = match ui::elements() {
+    let elements = match read::ui::elements() {
         Ok(elements) if !elements.is_empty() => elements,
         Ok(_) => return None,
         Err(error) => {
@@ -327,13 +319,24 @@ fn controls(_area: &Area) -> Option<Vec<Element>> {
     None
 }
 
+/// Writes the listing, treating a closed pipe as the end of the work rather
+/// than as a failure, so `screenpeek scan | head` is quiet.
 fn print(elements: &[&Element], json: bool) -> Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(elements)?);
-        return Ok(());
+    use std::io::Write;
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    let written = if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(elements)?)
+    } else {
+        elements
+            .iter()
+            .try_for_each(|element| writeln!(out, "{element}"))
+    };
+
+    match written {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => Ok(other?),
     }
-    for element in elements {
-        println!("{element}");
-    }
-    Ok(())
 }
