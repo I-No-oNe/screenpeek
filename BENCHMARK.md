@@ -75,7 +75,7 @@ a(so) 5 ":1.1" ... ":1.9" ...
 
 The five registered applications are `xdg-desktop-portal-gtk`, `kdeconnectd`, `udiskie`, `quickshell` and `qs`, all background services. The only one with windows reported `a(so) 0`: no children, nothing to read. No terminal, editor or browser on the machine registers at all.
 
-With a GTK4 application running, the tree is complete and exact, but its geometry is not: a window at 775,12 reports its contents from 0,0, because Wayland never tells a client where it sits. The compositor does know, so screenpeek asks Hyprland's IPC for the window list and joins the two on title and size. Text then comes from the toolkit, in any language, and the position from the compositor, with nothing recognized at all. Applications that expose no tree, and compositors that answer no IPC, fall back to reading the pixels.
+With a GTK4 application running, the tree is complete and exact, but its geometry is not: a window at 775,12 reports its contents from 0,0, because Wayland never tells a client where it sits. The compositor does know, so screenpeek asks the compositor for the window list, Hyprland over its JSON socket or Sway over the i3 protocol, and joins the two on title and size. Text then comes from the toolkit, in any language, and the position from the compositor, with nothing recognized at all. Applications that expose no tree, and compositors that answer no IPC, fall back to reading the pixels.
 
 ## Where each approach wins
 

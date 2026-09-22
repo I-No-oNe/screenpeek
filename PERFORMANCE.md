@@ -50,9 +50,9 @@ Build it stock.
 between two states, a menu opening and closing, is read once. An unchanged
 screen costs 12 ms end to end.
 
-**Windows located by the compositor, not by matching labels.** Hyprland's IPC
-reports every window's position and size, and the accessibility tree reports
-what each window contains. Joining the two on title and size gives exact
+**Windows located by the compositor, not by matching labels.** Hyprland's JSON
+socket and Sway's i3 protocol report every window's position and size, and the
+accessibility tree reports what each window contains. Joining the two on title and size gives exact
 coordinates for exact text with nothing recognized. A change inside a located
 window is not read at all, since its tree already describes it.
 
@@ -70,9 +70,8 @@ it has moved to. Patched reads went from 320-430 ms to 145-210 ms.
 
 ## Worth trying next, most promising first
 
-**Sway and river.** Window positions come from Hyprland's IPC today. Sway
-speaks the i3 protocol over `SWAYSOCK` and would slot in behind the same
-interface; river has no equivalent, so it keeps the label-matching fallback.
+**river and Wayfire.** Neither reports window geometry, so they keep the
+label-matching fallback. Hyprland and Sway are asked directly.
 
 **Detection as well as recognition, skipped for located windows.** Detection
 still runs over the whole capture even where every window is described by its

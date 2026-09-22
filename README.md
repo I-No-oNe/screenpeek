@@ -30,7 +30,7 @@ One binary, no runtime dependencies. The OCR models (12 MB) download to the cach
 
 Linux builds need `libwayland-dev` and `libxkbcommon-dev` (or your distribution's equivalents) at compile time.
 
-Linux talks to wlroots compositors directly: `wlr-screencopy` for capture, `wlr-virtual-pointer` and `virtual-keyboard` for input. Hyprland, Sway, river and Wayfire have all three. GNOME, KDE and X11 are not supported on Linux; Windows is.
+Linux talks to wlroots compositors directly: `wlr-screencopy` for capture, `wlr-virtual-pointer` and `virtual-keyboard` for input. Hyprland, Sway, river and Wayfire have all three. Window positions come from the compositor's own IPC, which Hyprland and Sway answer; on the others screenpeek works the position out from the pixels instead. GNOME, KDE and X11 are not supported on Linux; Windows is.
 
 ## Runtime design
 
@@ -46,7 +46,7 @@ Any platform ─── enigo ─── pointer and keyboard
 
 On Windows the control tree carries both the text and the rectangle, so recognition never runs.
 
-On Linux it carries only the text: Wayland never tells a window where it sits, so a GTK4 window reports its contents from `0,0` wherever it really is. The compositor does know, so screenpeek asks it and joins the two on window title and size. Where the compositor cannot be asked, it recognizes the pixels and matches a couple of labels to work the offset out instead. Every control in that window then gets a real position, including ones recognition cannot read at all, such as an icon whose only text is its accessible name, and the text is whatever the toolkit says it is, in any language. Windows with no accessible tree fall back to recognition alone.
+On Linux it carries only the text: Wayland never tells a window where it sits, so a GTK4 window reports its contents from `0,0` wherever it really is. The compositor does know, so screenpeek asks it, Hyprland over its JSON socket and Sway over the i3 protocol, and joins the two on window title and size. Where the compositor cannot be asked, it recognizes the pixels and matches a couple of labels to work the offset out instead. Every control in that window then gets a real position, including ones recognition cannot read at all, such as an icon whose only text is its accessible name, and the text is whatever the toolkit says it is, in any language. Windows with no accessible tree fall back to recognition alone.
 
 A running daemon keeps the models loaded, keeps the last frame, and re-reads only the rows that changed.
 
