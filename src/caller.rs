@@ -74,6 +74,7 @@ mod tests {
             width: 30,
             height: 12,
             source: crate::index::Source::Ocr,
+            ..Default::default()
         };
         let mut items = vec![element(20), element(220)];
         filter(

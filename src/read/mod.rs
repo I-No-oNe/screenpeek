@@ -244,6 +244,7 @@ impl Engine {
                 width: rect.width().max(0) as u32 / scale,
                 height: rect.height().max(0) as u32 / scale,
                 source: Source::Ocr,
+                ..Default::default()
             });
         }
 

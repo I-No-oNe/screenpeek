@@ -73,6 +73,7 @@ pub fn place(windows: &[Window], placements: &[Placement]) -> Vec<Placed> {
                     width: item.width,
                     height: item.height,
                     source: Source::Tree,
+                    ..Default::default()
                 })
                 .collect(),
         });
@@ -98,6 +99,7 @@ pub fn fuse(recognized: Vec<Element>, windows: &[Window]) -> Vec<Element> {
                 width: item.width,
                 height: item.height,
                 source: Source::Tree,
+                ..Default::default()
             });
         }
     }
@@ -167,6 +169,7 @@ mod tests {
             width: 40,
             height: 12,
             source: Source::Ocr,
+            ..Default::default()
         }
     }
 

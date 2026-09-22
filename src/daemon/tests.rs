@@ -18,6 +18,7 @@ fn only_a_tree_that_accounts_for_the_pixels_is_verified() {
         width: 40,
         height: 12,
         source: crate::index::Source::Ocr,
+        ..Default::default()
     };
     let recognized = vec![at("Save", 10), at("Cancel", 60), at("Apply", 110)];
 

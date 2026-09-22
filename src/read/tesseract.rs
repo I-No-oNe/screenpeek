@@ -219,6 +219,7 @@ fn elements(tsv: &str, capture: &Capture) -> Vec<Element> {
                 width: (line.right - line.left).max(0) as u32,
                 height: (line.bottom - line.top).max(0) as u32,
                 source: Source::Ocr,
+                ..Default::default()
             }
         })
         .collect();

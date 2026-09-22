@@ -345,6 +345,9 @@ fn scan(area: &Area) -> Result<Vec<Element>> {
         index::number(&mut elements);
     }
     caller::filter(&mut elements, &excluded);
+    if let Some(previous) = Snapshot::load() {
+        index::keep_ids(&mut elements, &previous.elements);
+    }
     Snapshot::new(elements.clone())
         .save()
         .context("cannot cache this scan")?;
@@ -405,6 +408,7 @@ fn known_text() -> Vec<Element> {
             width: item.width,
             height: item.height,
             source: index::Source::Tree,
+            ..Default::default()
         })
         .collect()
 }

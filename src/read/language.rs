@@ -297,6 +297,7 @@ mod tests {
             width: 10,
             height: 10,
             source: crate::index::Source::Ocr,
+            ..Default::default()
         }
     }
 
@@ -389,6 +390,7 @@ mod selection_tests {
                 width: 1,
                 height: 1,
                 source: crate::index::Source::Ocr,
+                ..Default::default()
             }];
             assert_eq!(
                 detect_with_locale(&known, &installed, locale).as_deref(),
@@ -410,6 +412,7 @@ mod selection_tests {
                 width: 1,
                 height: 1,
                 source: crate::index::Source::Ocr,
+                ..Default::default()
             }];
             assert_eq!(
                 detect_with_locale(&known, &[language.into()], None).as_deref(),

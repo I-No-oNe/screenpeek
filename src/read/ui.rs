@@ -46,6 +46,7 @@ fn readable(element: &UIElement) -> Option<Element> {
         width: rect.get_width() as u32,
         height: rect.get_height() as u32,
         source: crate::index::Source::Tree,
+        ..Default::default()
     })
 }
 

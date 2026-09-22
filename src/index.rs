@@ -21,7 +21,7 @@ pub enum Source {
     Tree,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Element {
     /// Position in the scan, from the top left of the screen.
     pub id: usize,
@@ -33,11 +33,21 @@ pub struct Element {
     pub height: u32,
     #[serde(default)]
     pub source: Source,
+    /// Accessible role, such as `button` or `checkbox`, when the tree knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Notable states: `checked`, `disabled`, `focused`, `selected`, `expanded`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<String>,
 }
 
 impl fmt::Display for Element {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {} @{},{}", self.id, self.text, self.x, self.y)
+        write!(f, "{} {} @{},{}", self.id, self.text, self.x, self.y)?;
+        if !self.states.is_empty() {
+            write!(f, " [{}]", self.states.join(" "))?;
+        }
+        Ok(())
     }
 }
 
@@ -93,64 +103,97 @@ impl Snapshot {
         fs::write(&path, json).with_context(|| format!("cannot write {}", path.display()))
     }
 
-    /// Resolve IDs or text using exact, prefix, substring, then folded matching; reject ambiguity.
+    /// Resolve an ID or text: exact, prefix, substring, then folded matching.
+    /// More than one hit is an error that lists them.
     pub fn find(&self, query: &str) -> Result<&Element> {
-        if let Ok(id) = query.parse::<usize>() {
-            return self
-                .elements
-                .iter()
-                .find(|element| element.id == id)
-                .ok_or_else(|| anyhow!("the last scan has no element {id}"));
+        match self.matches(query).as_slice() {
+            [] if query.parse::<usize>().is_ok() => bail!("the last scan has no element {query}"),
+            [] => bail!("nothing on screen matches {query:?}"),
+            [hit] => Ok(hit),
+            hits => {
+                let listing = hits
+                    .iter()
+                    .map(|hit| hit.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                bail!(
+                    "{} elements match {query:?}, click one by id:\n{listing}",
+                    hits.len()
+                )
+            }
         }
+    }
 
+    /// Every element the first matching rule finds.
+    pub fn matches(&self, query: &str) -> Vec<&Element> {
+        if let Ok(id) = query.parse::<usize>() {
+            return self.elements.iter().filter(|e| e.id == id).collect();
+        }
         let lowered = query.to_lowercase();
         let folded = fold(query);
-        // Try OCR-tolerant folding only after ordinary matching fails.
-        type Rule = (bool, fn(&str, &str) -> bool);
-        let rules: [Rule; 4] = [
-            (false, |text, needle| text == needle),
-            (false, |text, needle| text.starts_with(needle)),
-            (false, |text, needle| text.contains(needle)),
-            (true, |text, needle| text.contains(needle)),
+        let plain: Vec<String> = self
+            .elements
+            .iter()
+            .map(|e| e.text.to_lowercase())
+            .collect();
+        type Rule = fn(&str, &str) -> bool;
+        let rules: [Rule; 3] = [
+            |text, needle| text == needle,
+            |text, needle| text.starts_with(needle),
+            |text, needle| text.contains(needle),
         ];
-
-        for (folding, matches) in rules {
-            let needle = if folding { &folded } else { &lowered };
+        for rule in rules {
             let hits: Vec<&Element> = self
                 .elements
                 .iter()
-                .filter(|element| {
-                    let text = if folding {
-                        fold(&element.text)
-                    } else {
-                        element.text.to_lowercase()
-                    };
-                    matches(&text, needle)
-                })
+                .zip(&plain)
+                .filter(|(_, text)| rule(text, &lowered))
+                .map(|(element, _)| element)
                 .collect();
-
-            match hits.as_slice() {
-                [] => continue,
-                [hit] => return Ok(hit),
-                hits => {
-                    let listing = hits
-                        .iter()
-                        .map(|hit| hit.to_string())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    bail!(
-                        "{} elements match {query:?}, click one by id:\n{listing}",
-                        hits.len()
-                    );
-                }
+            if !hits.is_empty() {
+                return hits;
             }
         }
-
-        bail!("nothing on screen matches {query:?}")
+        // OCR-tolerant folding only after ordinary matching fails.
+        self.elements
+            .iter()
+            .filter(|element| fold(&element.text).contains(&folded))
+            .collect()
     }
 
     pub fn can_resolve(&self, query: &str) -> bool {
-        self.find(query).is_ok()
+        self.matches(query).len() == 1
+    }
+}
+
+/// Keep IDs from the previous scan for elements that did not move, so an ID
+/// stays valid across scans. New elements take the smallest free IDs.
+pub fn keep_ids(elements: &mut [Element], previous: &[Element]) {
+    const NEAR: i32 = 8;
+    let mut used = std::collections::HashSet::new();
+    let mut fresh = Vec::new();
+    for (index, element) in elements.iter_mut().enumerate() {
+        let kept = previous.iter().find(|old| {
+            old.text == element.text
+                && (old.x - element.x).abs() <= NEAR
+                && (old.y - element.y).abs() <= NEAR
+                && !used.contains(&old.id)
+        });
+        match kept {
+            Some(old) => {
+                element.id = old.id;
+                used.insert(old.id);
+            }
+            None => fresh.push(index),
+        }
+    }
+    let mut next = 0;
+    for index in fresh {
+        while used.contains(&next) {
+            next += 1;
+        }
+        elements[index].id = next;
+        used.insert(next);
     }
 }
 
@@ -226,6 +269,7 @@ mod tests {
                 width: 40,
                 height: 12,
                 source: Source::Ocr,
+                ..Default::default()
             })
             .collect();
         Snapshot::new(elements)
@@ -241,6 +285,7 @@ mod tests {
             width: 60,
             height: 20,
             source,
+            ..Default::default()
         };
         let merged = merge_tree(
             vec![
@@ -332,6 +377,28 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("2 elements match"), "{error}");
+    }
+
+    #[test]
+    fn unmoved_elements_keep_their_ids() {
+        let before = snapshot(&["Save", "Cancel", "Help"]).elements;
+        let mut after = snapshot(&["New", "Save", "Help"]).elements;
+        for element in &mut after {
+            if element.text != "New" {
+                let old = before.iter().find(|b| b.text == element.text).unwrap();
+                (element.x, element.y) = (old.x + 3, old.y);
+            }
+        }
+        keep_ids(&mut after, &before);
+        let id = |text: &str| after.iter().find(|e| e.text == text).unwrap().id;
+        assert_eq!((id("Save"), id("Help"), id("New")), (0, 2, 1));
+    }
+
+    #[test]
+    fn states_follow_the_position() {
+        let mut element = snapshot(&["Dark mode"]).elements.remove(0);
+        element.states = vec!["checked".into()];
+        assert_eq!(element.to_string(), "0 Dark mode @0,0 [checked]");
     }
 
     #[test]
