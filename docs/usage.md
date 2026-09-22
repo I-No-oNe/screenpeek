@@ -55,6 +55,18 @@ portal backends.
 The terminal that launched screenpeek is left out of scans when its window can
 be found through the process tree (Linux only).
 
+## Browsers
+
+Browsers hide their accessibility tree unless asked, so screenpeek falls back
+to OCR for them. For exact labels, roles and states, start them with it on:
+
+- Firefox: `GNOME_ACCESSIBILITY=1 firefox`, or set
+  `accessibility.force_disabled` to `-1` in `about:config`.
+- Chromium, Chrome and Electron apps: add `--force-renderer-accessibility`.
+
+`screenpeek tree` shows whether a window exposes its tree. For page content,
+a DOM-level tool is still the better choice when one is available.
+
 ## GNOME and KDE
 
 Install the portal backend: `xdg-desktop-portal-gnome` or
