@@ -16,6 +16,7 @@ dirs = "6"
 enigo = "0.6"
 image = { version = "0.25", default-features = false, features = ["png"] }
 ocrs = "0.13"
+rayon = "1"
 rten = "0.26"
 rten-imageproc = "0.26"
 serde = { version = "1", features = ["derive"] }

@@ -1,20 +1,23 @@
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::capture::{self, Capture, Region};
 use crate::index::{self, Element};
-use crate::ocr::Engine;
-use crate::screen::{self, Capture, Region};
+use crate::read::Engine;
 
 /// Past this much change, a full read beats stitching bands together.
 const FULL_REDRAW_FRACTION: f64 = 0.55;
@@ -28,11 +31,35 @@ const BAND_GAP: u32 = 48;
 /// How long a freshly started daemon is given to load its models.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// A daemon nobody has asked anything for this long shuts itself down, so an
+/// idle machine is not holding 12 MB of models and a capture buffer.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// Once every session that used the daemon has exited, it waits this long for
+/// a new one before shutting down.
+const ORPHAN_GRACE: Duration = Duration::from_secs(60);
+
+/// Recognition is given half the cores, rounded down, so a scan never takes
+/// the machine away from whatever the user is actually doing.
+fn worker_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|cores| (cores.get() / 2).max(2))
+        .unwrap_or(2)
+}
+
+/// Bands that have been read before are remembered, so a screen that flips
+/// between two states, a menu opening and closing, is read once.
+const BAND_CACHE_SIZE: usize = 32;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Request {
     pub token: String,
     pub region: Option<Region>,
     pub monitor: Option<usize>,
+    /// The process that owns the session issuing this request, so the daemon
+    /// can tell when the last one has gone. Zero where it cannot be told.
+    #[serde(default)]
+    pub session: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,6 +69,11 @@ pub enum Response {
 }
 
 pub fn serve() -> Result<()> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_threads())
+        .build_global()
+        .ok();
+
     let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .context("cannot listen on the loopback interface")?;
     let port = listener.local_addr()?.port();
@@ -50,9 +82,13 @@ pub fn serve() -> Result<()> {
 
     let mut session = Session::new()?;
     eprintln!(
-        "screenpeek: listening on 127.0.0.1:{port} ({})",
-        session.how
+        "screenpeek: listening on 127.0.0.1:{port} ({}, {} threads)",
+        session.how,
+        worker_threads()
     );
+
+    let activity = Arc::new(Mutex::new(Activity::new()));
+    idle_shutdown(Arc::clone(&activity));
 
     for stream in listener.incoming() {
         let mut stream = match stream {
@@ -65,10 +101,16 @@ pub fn serve() -> Result<()> {
 
         let response = match read_request(&mut stream) {
             Ok(request) if request.token != token => Response::Error("bad token".into()),
-            Ok(request) => match session.look(&request) {
-                Ok(elements) => Response::Elements { elements },
-                Err(error) => Response::Error(error.to_string()),
-            },
+            Ok(request) => {
+                activity
+                    .lock()
+                    .expect("activity not poisoned")
+                    .record(request.session);
+                match session.look(&request) {
+                    Ok(elements) => Response::Elements { elements },
+                    Err(error) => Response::Error(error.to_string()),
+                }
+            }
             Err(error) => Response::Error(error.to_string()),
         };
 
@@ -80,12 +122,78 @@ pub fn serve() -> Result<()> {
     Ok(())
 }
 
+/// What the daemon knows about who is still using it.
+struct Activity {
+    last_request: Instant,
+    sessions: HashSet<u32>,
+}
+
+impl Activity {
+    fn new() -> Activity {
+        Activity {
+            last_request: Instant::now(),
+            sessions: HashSet::new(),
+        }
+    }
+
+    fn record(&mut self, session: u32) {
+        self.last_request = Instant::now();
+        if session != 0 {
+            self.sessions.insert(session);
+        }
+    }
+
+    /// Why the daemon should stop, if it should.
+    fn expired(&mut self) -> Option<&'static str> {
+        self.sessions.retain(|session| alive(*session));
+
+        if self.last_request.elapsed() >= IDLE_TIMEOUT {
+            return Some("idle");
+        }
+        if self.sessions.is_empty() && self.last_request.elapsed() >= ORPHAN_GRACE {
+            return Some("no session left using it");
+        }
+        None
+    }
+}
+
+/// Ends the process once it is idle, or once every session that used it has
+/// exited. An agent that stops working takes the daemon with it.
+fn idle_shutdown(activity: Arc<Mutex<Activity>>) {
+    std::thread::spawn(move || loop {
+        sleep(Duration::from_secs(20));
+        let reason = activity
+            .lock()
+            .ok()
+            .and_then(|mut activity| activity.expired());
+        if let Some(reason) = reason {
+            eprintln!("screenpeek: {reason}, shutting down");
+            std::process::exit(0);
+        }
+    });
+}
+
+#[cfg(unix)]
+fn alive(pid: u32) -> bool {
+    // Signal 0 asks about the process without touching it.
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    unsafe { kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn alive(_pid: u32) -> bool {
+    true
+}
+
 struct Session {
     engine: Engine,
     how: &'static str,
     #[cfg(target_os = "linux")]
-    fast: Option<crate::wayland::Screencopy>,
+    fast: Option<capture::wayland::Screencopy>,
     previous: Option<Frame>,
+    bands: HashMap<u64, Vec<Element>>,
 }
 
 /// The last full-screen look and what was read out of it.
@@ -99,7 +207,7 @@ impl Session {
     fn new() -> Result<Session> {
         #[cfg(target_os = "linux")]
         {
-            let fast = crate::wayland::Screencopy::new();
+            let fast = capture::wayland::Screencopy::new();
             let how = if fast.is_ok() {
                 "wlr-screencopy"
             } else {
@@ -110,6 +218,7 @@ impl Session {
                 how,
                 fast: fast.ok(),
                 previous: None,
+                bands: HashMap::new(),
             })
         }
 
@@ -118,6 +227,7 @@ impl Session {
             engine: Engine::load()?,
             how: "portable capture",
             previous: None,
+            bands: HashMap::new(),
         })
     }
 
@@ -141,7 +251,17 @@ impl Session {
                 if bands.is_empty() {
                     (frame.elements.clone(), "unchanged")
                 } else if worth_patching(&bands, &capture.image) {
-                    (patch(&self.engine, frame, &capture, &bands)?, "patched")
+                    let kept: Vec<Element> = frame
+                        .elements
+                        .iter()
+                        .filter(|element| {
+                            let x = element.x - capture.origin.0;
+                            let y = element.y - capture.origin.1;
+                            !bands.iter().any(|band| band.contains(x, y))
+                        })
+                        .cloned()
+                        .collect();
+                    (self.patch(kept, &capture, &bands)?, "patched")
                 } else {
                     (self.engine.read(&capture)?, "full")
                 }
@@ -181,46 +301,95 @@ impl Session {
                 }
             }
         }
-        screen::capture(monitor, None)
+        capture::screen(monitor, None)
     }
 }
 
-/// Re-reads only the changed bands and keeps the elements outside them.
-fn patch(
-    engine: &Engine,
-    frame: &Frame,
-    capture: &Capture,
-    bands: &[Region],
-) -> Result<Vec<Element>> {
-    let local = |element: &Element| (element.x - capture.origin.0, element.y - capture.origin.1);
+impl Session {
+    /// Re-reads the changed bands, in parallel and skipping any band whose
+    /// pixels have been read before.
+    fn patch(
+        &mut self,
+        kept: Vec<Element>,
+        capture: &Capture,
+        bands: &[Region],
+    ) -> Result<Vec<Element>> {
+        let crops: Vec<(u64, Capture)> = bands
+            .iter()
+            .map(|band| {
+                let image = image::imageops::crop_imm(
+                    &capture.image,
+                    band.x as u32,
+                    band.y as u32,
+                    band.width,
+                    band.height,
+                )
+                .to_image();
+                (
+                    hash_image(&image),
+                    Capture {
+                        image,
+                        origin: capture.to_desktop(band.x, band.y),
+                    },
+                )
+            })
+            .collect();
 
-    let mut elements: Vec<Element> = frame
-        .elements
-        .iter()
-        .filter(|element| {
-            let (x, y) = local(element);
-            !bands.iter().any(|band| band.contains(x, y))
-        })
-        .cloned()
-        .collect();
+        let fresh: Vec<(u64, Vec<Element>)> = crops
+            .par_iter()
+            .filter(|(key, _)| !self.bands.contains_key(key))
+            .map(|(key, crop)| self.engine.read(crop).map(|read| (*key, read)))
+            .collect::<Result<_>>()?;
 
-    for band in bands {
-        let cropped = Capture {
-            image: image::imageops::crop_imm(
-                &capture.image,
-                band.x as u32,
-                band.y as u32,
-                band.width,
-                band.height,
-            )
-            .to_image(),
-            origin: capture.to_desktop(band.x, band.y),
-        };
-        elements.extend(engine.read(&cropped)?);
+        for (key, read) in fresh {
+            if self.bands.len() >= BAND_CACHE_SIZE {
+                self.bands.clear();
+            }
+            self.bands
+                .insert(key, offsets_from(&read, crop_origin(&crops, key)));
+        }
+
+        let mut elements = kept;
+        for (key, crop) in &crops {
+            let cached = self.bands.get(key).cloned().unwrap_or_default();
+            elements.extend(cached.into_iter().map(|element| Element {
+                x: element.x + crop.origin.0,
+                y: element.y + crop.origin.1,
+                ..element
+            }));
+        }
+
+        index::number(&mut elements);
+        Ok(elements)
     }
+}
 
-    index::number(&mut elements);
-    Ok(elements)
+/// Band text is cached in band-local coordinates, so the same band matches
+/// wherever it appears on screen.
+fn offsets_from(elements: &[Element], origin: (i32, i32)) -> Vec<Element> {
+    elements
+        .iter()
+        .map(|element| Element {
+            x: element.x - origin.0,
+            y: element.y - origin.1,
+            ..element.clone()
+        })
+        .collect()
+}
+
+fn crop_origin(crops: &[(u64, Capture)], key: u64) -> (i32, i32) {
+    crops
+        .iter()
+        .find(|(candidate, _)| *candidate == key)
+        .map(|(_, crop)| crop.origin)
+        .unwrap_or((0, 0))
+}
+
+fn hash_image(image: &RgbaImage) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    image.dimensions().hash(&mut hasher);
+    image.as_raw().hash(&mut hasher);
+    hasher.finish()
 }
 
 /// The horizontal bands that differ between two frames, top to bottom.
@@ -287,6 +456,7 @@ pub fn ask(region: Option<Region>, monitor: Option<usize>) -> Option<Vec<Element
         token,
         region,
         monitor,
+        session: owning_session(),
     };
     let mut line = serde_json::to_vec(&request).ok()?;
     line.push(b'\n');
@@ -301,6 +471,18 @@ pub fn ask(region: Option<Region>, monitor: Option<usize>) -> Option<Vec<Element
             None
         }
     }
+}
+
+/// The process that owns this command: the shell or agent that ran it. The
+/// daemon watches it so it can stop when that session is gone.
+#[cfg(unix)]
+fn owning_session() -> u32 {
+    std::os::unix::process::parent_id()
+}
+
+#[cfg(not(unix))]
+fn owning_session() -> u32 {
+    0
 }
 
 fn connect() -> Option<TcpStream> {

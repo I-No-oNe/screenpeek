@@ -2718,6 +2718,7 @@ dependencies = [
  "image",
  "memmap2",
  "ocrs",
+ "rayon",
  "rten",
  "rten-imageproc",
  "serde",
