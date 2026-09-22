@@ -1,30 +1,38 @@
 ---
 name: screenpeek
-description: Read and operate desktop apps as text. Use this INSTEAD of screenshots or computer-use for finding, clicking, filling and typing into labelled controls (buttons, menus, fields, tabs, list items) in any Linux or Windows app. Fall back to a screenshot only for visual judgment, canvases or unlabelled icons.
+description: Navigate and test desktop apps fast through text. Use it to find, click, fill and type into labelled controls, switch windows and run UI workflows in any Linux or Windows app, instead of screenshot round trips. Keep screenshots or computer use for anything visual - design, layout, colours, images, charts - and for controls with no label.
 ---
 
-# screenpeek: desktop control without screenshots
+# screenpeek: fast desktop navigation as text
 
-Before taking a screenshot or using a computer-use tool, try screenpeek. It
-returns a few tokens of text instead of an image, runs locally in ~100 ms, and
-clicks the exact centre of a named element.
+screenpeek turns the screen into a short list of `id text @x,y [states]`
+lines and clicks elements by name. It answers in about a tenth of a second,
+costs a few tokens instead of an image, and works for models without vision.
+
+Use it to **drive** apps: open menus, fill forms, switch windows, walk through
+a workflow and check that the expected labels appear. It does not judge how
+things look. When the question is visual (is it aligned, what colour, does
+the design look right, what is in this image) take a screenshot or use
+computer use.
 
 ## Look
 
 ```sh
-screenpeek scan --grep "Save"     # 7 Save @412,318  (id text @x,y)
+screenpeek windows                # open windows, which one has focus
 screenpeek scan --focused         # everything in the focused window
+screenpeek scan --grep "Save"     # 7 Save @412,318
 screenpeek scan --json            # adds size, source, role and states
 ```
 
-Prefer `--grep` or `--focused` over a full listing. An empty `--grep` result
+Prefer `--grep` or `--focused` to a full listing. An empty `--grep` result
 exits 0: read the output, not the exit code. States such as `[checked]` or
-`[disabled]` follow the position when the app reports them. IDs stay the same
-across scans while an element does not move.
+`[disabled]` come from the app. IDs stay the same across scans while an
+element does not move.
 
 ## Act
 
 ```sh
+screenpeek focus "Firefox"
 screenpeek click "Save" --fresh
 screenpeek fill "Search" "cats" --fresh      # clicks, then types; does not clear
 screenpeek key ctrl+s
@@ -43,8 +51,8 @@ screenpeek run "click File" "click Save As" "type report.pdf" "key enter" "wait 
 - After acting, verify with `scan --grep` before the next decision.
 - Never guess coordinates for something absent from the scan.
 
-## When to use something else
+## Use something else when
 
-- Browser page content: use the DOM or a browser tool when available.
-- Appearance, layout, images, charts, unlabelled icons: take a screenshot.
-- Other scripts: `--lang heb` (etc.) needs Tesseract data installed.
+- The answer depends on appearance: screenshot or computer use.
+- A control has no text or accessible name (bare icons): screenshot.
+- It is web page content and a DOM or browser tool is available: use that.

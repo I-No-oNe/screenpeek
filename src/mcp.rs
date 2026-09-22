@@ -31,7 +31,7 @@ struct Tool {
 const TOOLS: &[Tool] = &[
     Tool {
         name: "scan",
-        description: "List desktop text and controls as `id text @x,y [states]`. Use instead of a screenshot to find labelled controls.",
+        description: "List desktop text and controls as `id text @x,y [states]`. Fast way to find labelled controls while navigating; use a screenshot for visual questions.",
         params: &[
             ("grep", Kind::Option, "Only elements containing this text"),
             ("focused", Kind::Flag, "Only the focused window"),
