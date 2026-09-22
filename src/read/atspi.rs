@@ -10,6 +10,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use zbus::blocking::connection::Builder;
 use zbus::blocking::{Connection, Proxy};
 use zbus::names::BusName;
@@ -46,20 +47,41 @@ pub struct Window {
 
 /// Every window the accessibility bus is willing to describe.
 pub fn windows() -> Result<Vec<Window>> {
+    windows_where(|_| true)
+}
+
+/// The same, but only walking the contents of the windows the caller still
+/// wants. A window it skips comes back with its title and size and no items,
+/// so the caller can keep whatever it already had for it.
+pub fn windows_where(wanted: impl Fn(&Window) -> bool + Sync) -> Result<Vec<Window>> {
     let bus = address().context("no accessibility bus")?;
     let connection = Builder::address(bus.as_str())?.build()?;
 
-    let mut windows = Vec::new();
+    let mut frames = Vec::new();
     for (name, path) in children(&connection, REGISTRY, ROOT).unwrap_or_default() {
         for (window_name, window_path) in
             children(&connection, name.as_str(), path.as_str()).unwrap_or_default()
         {
-            if let Some(window) = read_window(&connection, window_name.as_str(), &window_path) {
-                windows.push(window);
+            if let Some(frame) = read_frame(&connection, window_name.as_str(), &window_path) {
+                frames.push((window_name, window_path, frame));
             }
         }
     }
-    Ok(windows)
+
+    // Each window is a long conversation with its own application, so they are
+    // walked at the same time rather than one after another.
+    Ok(frames
+        .into_par_iter()
+        .map(|(name, path, window)| {
+            if !wanted(&window) {
+                return window;
+            }
+            match read_items(&connection, name.as_str(), &path) {
+                Some(items) => Window { items, ..window },
+                None => window,
+            }
+        })
+        .collect())
 }
 
 fn address() -> Result<String> {
@@ -68,12 +90,22 @@ fn address() -> Result<String> {
     Ok(proxy.call("GetAddress", &())?)
 }
 
-fn read_window(connection: &Connection, name: &str, path: &OwnedObjectPath) -> Option<Window> {
+/// A window's title and size, without walking what is inside it.
+fn read_frame(connection: &Connection, name: &str, path: &OwnedObjectPath) -> Option<Window> {
     let (_, _, width, height) = extents(connection, name, path)?;
     if width == 0 || height == 0 {
         return None;
     }
 
+    Some(Window {
+        title: text(connection, name, path).unwrap_or_default(),
+        width,
+        height,
+        items: Vec::new(),
+    })
+}
+
+fn read_items(connection: &Connection, name: &str, path: &OwnedObjectPath) -> Option<Vec<Item>> {
     let mut items = Vec::new();
     let mut queue = vec![path.clone()];
     let started = Instant::now();
@@ -95,13 +127,7 @@ fn read_window(connection: &Connection, name: &str, path: &OwnedObjectPath) -> O
 
     items.sort_by_key(|item| (item.y, item.x, item.text.clone()));
     items.dedup_by(|a, b| a.text == b.text && a.x == b.x && a.y == b.y);
-
-    Some(Window {
-        title: text(connection, name, path).unwrap_or_default(),
-        width,
-        height,
-        items,
-    })
+    Some(items)
 }
 
 fn read_item(connection: &Connection, name: &str, path: &OwnedObjectPath) -> Option<Item> {
