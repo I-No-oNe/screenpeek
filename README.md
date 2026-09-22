@@ -60,6 +60,13 @@ screenshot: scan for the label, click or fill it by name, then verify with
 another scan. Screenshots stay the fallback for visual questions. Start a new
 agent session afterwards; it must run inside the logged-in desktop session.
 
+Agents without skills can use the MCP server instead:
+
+```sh
+claude mcp add screenpeek -- screenpeek mcp
+codex mcp add screenpeek -- screenpeek mcp
+```
+
 To make it explicit, add to your `AGENTS.md` or `CLAUDE.md`:
 
 > For desktop apps, use `screenpeek` (scan, click, fill, key, run) instead of

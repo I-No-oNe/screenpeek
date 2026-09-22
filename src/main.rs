@@ -4,6 +4,7 @@ mod caller;
 mod capture;
 mod daemon;
 mod index;
+mod mcp;
 mod pointer;
 #[cfg(target_os = "linux")]
 mod portal;
@@ -139,6 +140,9 @@ enum Command {
 
     /// Keep the models loaded in the background, so later commands are faster
     Serve,
+
+    /// Serve the commands as MCP tools over stdio
+    Mcp,
 
     /// List installed Tesseract text recognition languages
     Languages,
@@ -313,6 +317,8 @@ fn main() -> Result<()> {
         Command::Run { steps, area } => run(&steps, &area)?,
 
         Command::Serve => daemon::serve()?,
+
+        Command::Mcp => mcp::serve()?,
 
         #[cfg(target_os = "linux")]
         Command::Tree => {
