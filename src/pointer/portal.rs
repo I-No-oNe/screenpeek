@@ -92,32 +92,42 @@ impl Remote {
         Ok(remote)
     }
 
-    pub fn click(&self, x: i32, y: i32, button: Button, times: u32) -> Result<()> {
+    fn notify(
+        &self,
+        method: &str,
+        body: &(impl serde::Serialize + zbus::zvariant::DynamicType),
+    ) -> Result<()> {
+        self.connection
+            .call_method(Some(SERVICE), PATH, Some(INTERFACE), method, body)?;
+        Ok(())
+    }
+
+    pub fn move_to(&self, x: i32, y: i32) -> Result<()> {
         let (stream, x, y) = locate(&self.streams, x, y)?;
-        self.connection.call_method(
-            Some(SERVICE),
-            PATH,
-            Some(INTERFACE),
+        self.notify(
             "NotifyPointerMotionAbsolute",
             &(&self.session, Options::new(), stream, x, y),
-        )?;
-        let button: i32 = match button {
+        )
+    }
+
+    pub fn button(&self, button: Button, pressed: bool) -> Result<()> {
+        let code: i32 = match button {
             Button::Left => 0x110,
             Button::Right => 0x111,
             Button::Middle => 0x112,
         };
-        for _ in 0..times {
-            for state in [1u32, 0] {
-                self.connection.call_method(
-                    Some(SERVICE),
-                    PATH,
-                    Some(INTERFACE),
-                    "NotifyPointerButton",
-                    &(&self.session, Options::new(), button, state),
-                )?;
-            }
-        }
-        Ok(())
+        self.notify(
+            "NotifyPointerButton",
+            &(&self.session, Options::new(), code, u32::from(pressed)),
+        )
+    }
+
+    /// Scroll by whole steps; positive is down or right.
+    pub fn scroll(&self, steps: i32, horizontal: bool) -> Result<()> {
+        self.notify(
+            "NotifyPointerAxisDiscrete",
+            &(&self.session, Options::new(), u32::from(horizontal), steps),
+        )
     }
 
     pub fn key(&self, key: Key, pressed: bool) -> Result<()> {

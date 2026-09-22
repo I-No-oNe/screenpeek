@@ -6,10 +6,14 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use enigo::{Button as EnigoButton, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+pub use enigo::Direction;
+use enigo::{Axis, Button as EnigoButton, Coordinate, Enigo, Key, Keyboard, Mouse, Settings};
 
 /// Time for a clicked widget to take focus before typing into it.
 const FOCUS_DELAY: Duration = Duration::from_millis(120);
+
+/// Pause between drag movements so applications see a drag, not a jump.
+const DRAG_STEP: Duration = Duration::from_millis(15);
 
 /// Time for a new keyboard's keymap to land. Raise if characters go missing.
 const KEYMAP_DELAY: Duration = Duration::from_millis(30);
@@ -147,21 +151,73 @@ impl Pointer {
         })
     }
 
-    pub fn click(&mut self, x: i32, y: i32, button: Button, times: u32) -> Result<()> {
+    pub fn move_to(&mut self, x: i32, y: i32) -> Result<()> {
         #[cfg(target_os = "linux")]
         if let Some(portal) = &self.portal {
-            return portal.click(x, y, button, times);
+            return portal.move_to(x, y);
         }
-        let enigo = self.enigo.as_mut().context("input backend unavailable")?;
-        enigo
+        self.enigo()?
             .move_mouse(x, y, Coordinate::Abs)
-            .with_context(|| format!("cannot move the pointer to {x},{y}"))?;
+            .with_context(|| format!("cannot move the pointer to {x},{y}"))
+    }
+
+    pub fn button(&mut self, button: Button, direction: Direction) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(portal) = &self.portal {
+            if direction != Direction::Release {
+                portal.button(button, true)?;
+            }
+            if direction != Direction::Press {
+                portal.button(button, false)?;
+            }
+            return Ok(());
+        }
+        self.enigo()?
+            .button(button.into(), direction)
+            .context("cannot click")
+    }
+
+    pub fn click(&mut self, x: i32, y: i32, button: Button, times: u32) -> Result<()> {
+        self.move_to(x, y)?;
         for _ in 0..times {
-            enigo
-                .button(button.into(), Direction::Click)
-                .context("cannot click")?;
+            self.button(button, Direction::Click)?;
         }
         Ok(())
+    }
+
+    /// Scroll by whole steps at the pointer; positive is down or right.
+    pub fn scroll(&mut self, steps: i32, horizontal: bool) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(portal) = &self.portal {
+            return portal.scroll(steps, horizontal);
+        }
+        let axis = if horizontal {
+            Axis::Horizontal
+        } else {
+            Axis::Vertical
+        };
+        self.enigo()?.scroll(steps, axis).context("cannot scroll")
+    }
+
+    /// Press at one point, move in small steps, release at the other.
+    pub fn drag(&mut self, from: (i32, i32), to: (i32, i32)) -> Result<()> {
+        const STEPS: i32 = 12;
+        self.move_to(from.0, from.1)?;
+        self.button(Button::Left, Direction::Press)?;
+        let moved = (1..=STEPS).try_for_each(|step| {
+            sleep(DRAG_STEP);
+            self.move_to(
+                from.0 + (to.0 - from.0) * step / STEPS,
+                from.1 + (to.1 - from.1) * step / STEPS,
+            )
+        });
+        sleep(DRAG_STEP);
+        let released = self.button(Button::Left, Direction::Release);
+        moved.and(released)
+    }
+
+    fn enigo(&mut self) -> Result<&mut Enigo> {
+        self.enigo.as_mut().context("input backend unavailable")
     }
 
     pub fn press(&mut self, combination: &str) -> Result<()> {

@@ -56,6 +56,60 @@ enum Command {
         #[arg(long)]
         fresh: bool,
 
+        /// Warn when nothing near the target changes after the click
+        #[arg(long)]
+        check: bool,
+
+        #[command(flatten)]
+        area: Area,
+    },
+
+    /// Wait until an element appears, or disappears with --gone
+    Wait {
+        target: String,
+
+        /// Give up after this many seconds
+        #[arg(long, default_value_t = 10.0)]
+        timeout: f64,
+
+        /// Wait for the element to disappear instead
+        #[arg(long)]
+        gone: bool,
+
+        #[command(flatten)]
+        area: Area,
+    },
+
+    /// Scroll under the pointer, or over an element with --at
+    Scroll {
+        #[arg(value_parser = ["up", "down", "left", "right"])]
+        direction: String,
+
+        /// Number of wheel steps
+        #[arg(default_value_t = 3)]
+        amount: u32,
+
+        /// Move the pointer over this element first
+        #[arg(long, value_name = "TARGET")]
+        at: Option<String>,
+
+        /// Scan again instead of using the last scan
+        #[arg(long)]
+        fresh: bool,
+
+        #[command(flatten)]
+        area: Area,
+    },
+
+    /// Drag one element onto another
+    Drag {
+        from: String,
+        to: String,
+
+        /// Scan again instead of using the last scan
+        #[arg(long)]
+        fresh: bool,
+
         #[command(flatten)]
         area: Area,
     },
@@ -73,9 +127,9 @@ enum Command {
         combination: String,
     },
 
-    /// Run several steps against one scan: click, type, key, wait
+    /// Run steps in order: click, fill, type, key, wait, scroll, drag
     Run {
-        /// Steps such as "click Save", "type report", "key enter", "wait Done"
+        /// Steps such as "click Save", "wait Saved", "scroll down 3", "drag A to B"
         #[arg(required = true)]
         steps: Vec<String>,
 
@@ -187,13 +241,69 @@ fn main() -> Result<()> {
             button,
             double,
             fresh,
+            check,
             area,
         } => {
             let mut pointer = Pointer::new()?;
             let snapshot = resolve(&target, fresh, &area)?;
             let element = snapshot.find(&target)?;
-            pointer.click(element.x, element.y, button, if double { 2 } else { 1 })?;
+            let times = if double { 2 } else { 1 };
+            let act = |pointer: &mut Pointer| pointer.click(element.x, element.y, button, times);
+            if check {
+                checked(&mut pointer, element, act)?;
+            } else {
+                act(&mut pointer)?;
+            }
             println!("{element}");
+        }
+
+        Command::Wait {
+            target,
+            timeout,
+            gone,
+            area,
+        } => {
+            let timeout = std::time::Duration::try_from_secs_f64(timeout)
+                .context("--timeout must be a positive number of seconds")?;
+            let snapshot = wait(&target, timeout, gone, &area)?;
+            match snapshot.matches(&target).first() {
+                Some(element) => println!("{element}"),
+                None => println!("{target} is gone"),
+            }
+        }
+
+        Command::Scroll {
+            direction,
+            amount,
+            at,
+            fresh,
+            area,
+        } => {
+            let mut pointer = Pointer::new()?;
+            if let Some(at) = &at {
+                let snapshot = resolve(at, fresh, &area)?;
+                let element = snapshot.find(at)?;
+                pointer.move_to(element.x, element.y)?;
+            }
+            scroll(&mut pointer, &direction, amount)?;
+        }
+
+        Command::Drag {
+            from,
+            to,
+            fresh,
+            area,
+        } => {
+            let mut pointer = Pointer::new()?;
+            let snapshot = resolve(&from, fresh, &area)?;
+            let snapshot = if snapshot.can_resolve(&to) {
+                snapshot
+            } else {
+                Snapshot::new(scan(&area)?)
+            };
+            let (start, end) = (snapshot.find(&from)?, snapshot.find(&to)?);
+            pointer.drag((start.x, start.y), (end.x, end.y))?;
+            println!("{start}\n{end}");
         }
 
         Command::Type { text } => Pointer::new()?.type_text(&text)?,
@@ -273,50 +383,136 @@ fn main() -> Result<()> {
 fn run(steps: &[String], area: &Area) -> Result<()> {
     let mut pointer = Pointer::new()?;
     let mut snapshot: Option<Snapshot> = None;
+    // A snapshot that can answer every target, scanning only when needed.
+    let current = |snapshot: &mut Option<Snapshot>, targets: &[&str]| -> Result<Snapshot> {
+        match snapshot.take() {
+            Some(known) if targets.iter().all(|t| known.can_resolve(t)) => Ok(known),
+            _ => Ok(Snapshot::new(scan(area)?)),
+        }
+    };
 
     for step in steps {
         let (verb, argument) = step.split_once(' ').unwrap_or((step.as_str(), ""));
         match verb {
-            "click" | "wait" | "fill" => {
+            "click" | "fill" => {
                 let (target, text) = match verb {
                     "fill" => argument.split_once(" with ").unwrap_or((argument, "")),
                     _ => (argument, ""),
                 };
-
-                let known = snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| snapshot.can_resolve(target));
-                if !known {
-                    snapshot = Some(Snapshot::new(scan(area)?));
-                }
-                let current = snapshot.as_ref().expect("just scanned");
-                let element = current.find(target)?;
-
-                if verb == "wait" {
-                    println!("{element}");
-                    continue;
-                }
-
+                let known = current(&mut snapshot, &[target])?;
+                let element = known.find(target)?;
                 pointer.click(element.x, element.y, Button::Left, 1)?;
                 println!("{element}");
                 if verb == "fill" {
                     pointer.wait_for_focus();
                     pointer.type_text(text)?;
                 }
-                snapshot = None;
             }
-            "type" => {
-                pointer.type_text(argument)?;
-                snapshot = None;
+            "wait" => {
+                let known = wait(argument, WAIT_TIMEOUT, false, area)?;
+                if let Some(element) = known.matches(argument).first() {
+                    println!("{element}");
+                }
+                snapshot = Some(known);
+                continue;
             }
-            "key" => {
-                pointer.press(argument)?;
-                snapshot = None;
+            "scroll" => {
+                let (direction, amount) = argument.split_once(' ').unwrap_or((argument, "3"));
+                let amount = amount.parse().context("scroll amount must be a number")?;
+                scroll(&mut pointer, direction, amount)?;
             }
+            "drag" => {
+                let (from, to) = argument
+                    .split_once(" to ")
+                    .context("drag steps look like \"drag A to B\"")?;
+                let known = current(&mut snapshot, &[from, to])?;
+                let (start, end) = (known.find(from)?, known.find(to)?);
+                pointer.drag((start.x, start.y), (end.x, end.y))?;
+                println!("{start}\n{end}");
+            }
+            "type" => pointer.type_text(argument)?,
+            "key" => pointer.press(argument)?,
             other => anyhow::bail!("unknown step {other:?} in {step:?}"),
         }
+        // Anything but a wait may have changed the screen.
+        snapshot = None;
     }
 
+    Ok(())
+}
+
+/// How long a `wait` step in `run` waits.
+const WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Scan until the target appears (or, with `gone`, disappears).
+fn wait(target: &str, timeout: std::time::Duration, gone: bool, area: &Area) -> Result<Snapshot> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let snapshot = Snapshot::new(scan(area)?);
+        if snapshot.matches(target).is_empty() == gone {
+            return Ok(snapshot);
+        }
+        if std::time::Instant::now() >= deadline {
+            match gone {
+                true => anyhow::bail!("{target:?} is still on screen after {timeout:?}"),
+                false => anyhow::bail!("nothing matched {target:?} within {timeout:?}"),
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
+fn scroll(pointer: &mut Pointer, direction: &str, amount: u32) -> Result<()> {
+    let steps = i32::try_from(amount).context("scroll amount is too large")?;
+    match direction {
+        "down" => pointer.scroll(steps, false),
+        "up" => pointer.scroll(-steps, false),
+        "right" => pointer.scroll(steps, true),
+        "left" => pointer.scroll(-steps, true),
+        other => anyhow::bail!("unknown scroll direction {other:?}; use up, down, left or right"),
+    }
+}
+
+/// Run an action and warn when the pixels around the target stay the same.
+fn checked(
+    pointer: &mut Pointer,
+    element: &Element,
+    act: impl FnOnce(&mut Pointer) -> Result<()>,
+) -> Result<()> {
+    let near = || {
+        let around = Region {
+            x: element.x - 200,
+            y: element.y - 100,
+            width: 400,
+            height: 200,
+        };
+        capture::screen(None, Some(around))
+            .or_else(|_| {
+                capture::screen(
+                    None,
+                    Some(Region {
+                        x: element.x,
+                        y: element.y,
+                        width: 200,
+                        height: 100,
+                    }),
+                )
+            })
+            .ok()
+    };
+    let before = near();
+    act(pointer)?;
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    match (before, near()) {
+        (Some(before), Some(after)) if before.image == after.image => {
+            eprintln!(
+                "screenpeek: nothing changed near {:?} after the action",
+                element.text
+            )
+        }
+        (None, _) | (_, None) => eprintln!("screenpeek: cannot capture to check the action"),
+        _ => {}
+    }
     Ok(())
 }
 
