@@ -37,23 +37,23 @@ Linux talks to wlroots compositors directly: `wlr-screencopy` for capture, `wlr-
 ```text
 Windows ─── UI Automation ─── exact text + screen rectangles ─── elements
 
-Linux ───┬─ AT-SPI ────────── exact text, no usable position ──┐
-         │                                                     ├─ fused
-         └─ wlr-screencopy ── OCR ── text with positions ──────┘
+Linux ───┬─ AT-SPI ────────── exact text, no position ────────┐
+         ├─ compositor IPC ── window positions ───────────────┼─ joined
+         └─ wlr-screencopy ── OCR for whatever is left over ──┘
 
 Any platform ─── enigo ─── pointer and keyboard
 ```
 
 On Windows the control tree carries both the text and the rectangle, so recognition never runs.
 
-On Linux it carries only the text: Wayland never tells a window where it sits, so a GTK4 window reports its contents from `0,0` wherever it really is. screenpeek reads the pixels as well, matches a couple of labels between the two, and that gives the window's offset. Every control in that window then gets a real position, including ones recognition cannot read at all, such as an icon whose only text is its accessible name, and the text is whatever the toolkit says it is, in any language. Windows with no accessible tree fall back to recognition alone.
+On Linux it carries only the text: Wayland never tells a window where it sits, so a GTK4 window reports its contents from `0,0` wherever it really is. The compositor does know, so screenpeek asks it and joins the two on window title and size. Where the compositor cannot be asked, it recognizes the pixels and matches a couple of labels to work the offset out instead. Every control in that window then gets a real position, including ones recognition cannot read at all, such as an icon whose only text is its accessible name, and the text is whatever the toolkit says it is, in any language. Windows with no accessible tree fall back to recognition alone.
 
 A running daemon keeps the models loaded, keeps the last frame, and re-reads only the rows that changed.
 
 ## Commands
 
 ```
-screenpeek scan   [--grep TEXT] [--region X,Y,W,H] [--monitor N] [--json]
+screenpeek scan   [--grep TEXT] [--region X,Y,W,H] [--monitor N] [--focused] [--json]
 screenpeek click  <id|text> [--button left|right|middle] [--double] [--fresh]
 screenpeek type   <text>
 screenpeek key    <combination>

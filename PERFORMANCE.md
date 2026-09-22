@@ -19,13 +19,14 @@ comes first.
 | Stage | Cost |
 | --- | --- |
 | Capture, one shot | 354 ms |
-| Capture, daemon with a persistent buffer | 9–26 ms |
+| Capture, daemon with a persistent buffer | 9-26 ms |
 | Accessibility tree walk, one window | 94 ms |
 | Accessibility tree walk, nothing exposed | 3 ms |
 | Recognition, 900x560 dialog, 20 labels | 336 ms |
-| Recognition, 1920x1080 text-dense screen | 1,700–3,000 ms |
-| Recognition, changed bands only | 320-430 ms |
+| Recognition, 1920x1080 text-dense screen | 1,700-3,000 ms |
+| Recognition, changed areas only | 145-210 ms |
 | Repeat look, nothing changed | 12-16 ms |
+| Reading one located window, no recognition at all | 0 ms |
 
 Recognition is now the whole cost. It scales with how much text is on screen,
 not with area: half the screen took 1,679 ms against 1,739 ms for all of it,
@@ -49,24 +50,33 @@ Build it stock.
 between two states, a menu opening and closing, is read once. An unchanged
 screen costs 12 ms end to end.
 
+**Windows located by the compositor, not by matching labels.** Hyprland's IPC
+reports every window's position and size, and the accessibility tree reports
+what each window contains. Joining the two on title and size gives exact
+coordinates for exact text with nothing recognized. A change inside a located
+window is not read at all, since its tree already describes it.
+
+**Changed areas trimmed to the columns that changed.** A change is now a
+rectangle rather than a full-width band, which is what lets a change inside one
+window be recognized as belonging to that window.
+
+**`scan --focused`.** The compositor names the focused window, so a scan can be
+limited to it: 392 ms against 2.0 s for the whole screen, and the answer holds
+only what the user is actually looking at.
+
+**A per-line recognition cache.** Each detected line is hashed by its pixels
+and remembered, so a line that has been read before is not read again wherever
+it has moved to. Patched reads went from 320-430 ms to 145-210 ms.
+
 ## Worth trying next, most promising first
 
-**Skip recognition for windows the tree already covers.** A window whose
-accessible tree is readable only needs pixels to work out where it sits. Once
-the daemon has that offset, and the window has not moved, another look costs
-the 94 ms tree walk and nothing else. Detecting movement is cheap: the daemon
-already compares frames, and a window whose rows are unchanged has not moved.
-This would take an accessible application from ~2 s to ~0.1 s per look.
+**Sway and river.** Window positions come from Hyprland's IPC today. Sway
+speaks the i3 protocol over `SWAYSOCK` and would slot in behind the same
+interface; river has no equivalent, so it keeps the label-matching fallback.
 
-**Recognize the focused window only.** Most interactions concern one window.
-Asking the compositor which one has focus and reading that rectangle would cut
-the work to the text in it. The numbers above suggest most of a saving comes
-from excluding text-dense background windows, which is exactly what this does.
-
-**Cache recognition per line.** Bands are cached whole; a band that scrolls by
-one line misses the cache entirely. Hashing each detected line instead would
-turn that into a single line's work, which is where the current worst case
-lives.
+**Detection as well as recognition, skipped for located windows.** Detection
+still runs over the whole capture even where every window is described by its
+tree. Cropping the input to the uncovered rectangles would remove that too.
 
 **A different recognition engine.** PaddleOCR's mobile models through ONNX
 Runtime are typically several times faster than ocrs on CPU, and they are

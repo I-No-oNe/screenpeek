@@ -33,7 +33,7 @@ patched: 47 elements, capture  9ms, read  427ms
 
 Two things carry the speed:
 
-**Persistent capture.** A one-shot screenshot opens a capture session, allocates a buffer and tears it all down: 354 ms per frame through a general-purpose capture crate, 529 ms through `grim`. The daemon holds one Wayland connection and one shared-memory buffer and asks the compositor to copy into it, which lands at **9–26 ms**.
+**Persistent capture.** A one-shot screenshot opens a capture session, allocates a buffer and tears it all down: 354 ms per frame through a general-purpose capture crate, 529 ms through `grim`. The daemon holds one Wayland connection and one shared-memory buffer and asks the compositor to copy into it, which lands at **9-26 ms**.
 
 **Reading only what changed.** The daemon keeps the last frame, compares rows, groups the differing ones into bands and re-reads only those, keeping the text outside them. A repeat look drops from ~2.6 s to **~400 ms**. Once more than 55% of the rows have changed it reads the whole screen instead, because stitching then costs more than it saves.
 
@@ -61,7 +61,7 @@ This was tested, not assumed.
 
 **Windows.** UI Automation exposes every control's name and its rectangle in screen coordinates. It is strictly better than recognition, so screenpeek uses it first on Windows and only falls back to reading pixels for windows that expose nothing. The Windows build is compiled and tested in CI; the numbers above were not measured on Windows.
 
-**Linux.** AT-SPI was queried directly on the benchmark machine:
+**Linux.** The tree is used for its text and the compositor for its geometry. AT-SPI was queried directly on the benchmark machine:
 
 ```console
 $ busctl --user call org.a11y.Bus /org/a11y/bus org.a11y.Bus GetAddress
@@ -75,7 +75,7 @@ a(so) 5 ":1.1" ... ":1.9" ...
 
 The five registered applications are `xdg-desktop-portal-gtk`, `kdeconnectd`, `udiskie`, `quickshell` and `qs`, all background services. The only one with windows reported `a(so) 0`: no children, nothing to read. No terminal, editor or browser on the machine registers at all.
 
-Beyond an empty tree, Wayland has a structural problem for this use: a client is never told where it sits on screen, so the extents AT-SPI reports are window-relative or zero, and there is nothing to move the pointer to. A screenshot is the one thing that is true on every Linux desktop, so that is what gets read.
+With a GTK4 application running, the tree is complete and exact, but its geometry is not: a window at 775,12 reports its contents from 0,0, because Wayland never tells a client where it sits. The compositor does know, so screenpeek asks Hyprland's IPC for the window list and joins the two on title and size. Text then comes from the toolkit, in any language, and the position from the compositor, with nothing recognized at all. Applications that expose no tree, and compositors that answer no IPC, fall back to reading the pixels.
 
 ## Where each approach wins
 
