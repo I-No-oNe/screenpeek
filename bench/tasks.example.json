@@ -1,0 +1,4 @@
+[
+  {"name": "Files: open Documents", "steps": ["wait Documents", "click Documents --fresh", "scan --focused --grep Documents"]},
+  {"name": "Files: go back", "steps": ["click Back --fresh", "wait Home"]}
+]

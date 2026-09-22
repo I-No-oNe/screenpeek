@@ -54,9 +54,29 @@ impl fmt::Display for Element {
 /// Prefer tree labels for matching controls without dropping unrelated OCR text.
 pub fn merge_tree(mut pixels: Vec<Element>, tree: Vec<Element>) -> Vec<Element> {
     pixels.retain(|pixel| !tree.iter().any(|control| same_control(pixel, control)));
+    let tree = without_echoing_icons(tree);
     pixels.extend(tree);
     number(&mut pixels);
     pixels
+}
+
+/// Drop icons named after the label beside them, which would make every
+/// such label ambiguous.
+fn without_echoing_icons(tree: Vec<Element>) -> Vec<Element> {
+    let echoes = |icon: &Element| {
+        icon.role.as_deref() == Some("image")
+            && tree.iter().any(|label| {
+                label.role.as_deref() != Some("image")
+                    && label.text == icon.text
+                    && (label.y - icon.y).abs() <= icon.height.max(label.height) as i32 / 2
+                    && (label.x - icon.x).abs() <= 200
+            })
+    };
+    let keep: Vec<bool> = tree.iter().map(|element| !echoes(element)).collect();
+    tree.into_iter()
+        .zip(keep)
+        .filter_map(|(element, keep)| keep.then_some(element))
+        .collect()
 }
 
 fn same_control(pixel: &Element, control: &Element) -> bool {
@@ -305,6 +325,30 @@ mod tests {
         assert!(merged
             .iter()
             .any(|e| e.text == "File" && e.x == 20 && e.source == Source::Tree));
+    }
+
+    #[test]
+    fn an_icon_named_like_its_label_is_not_a_second_match() {
+        let at = |text: &str, x, role: &str| Element {
+            text: text.into(),
+            x,
+            y: 706,
+            width: 16,
+            height: 36,
+            source: Source::Tree,
+            role: Some(role.into()),
+            ..Default::default()
+        };
+        let merged = merge_tree(
+            Vec::new(),
+            vec![
+                at("Documents", 26, "image"),
+                at("Documents", 99, "label"),
+                at("Trash", 26, "image"),
+            ],
+        );
+        assert_eq!(merged.len(), 2);
+        assert_eq!(Snapshot::new(merged).find("Documents").unwrap().x, 99);
     }
 
     #[test]
