@@ -119,6 +119,37 @@ struct Area {
     /// Read this monitor instead of the primary one
     #[arg(long, value_name = "INDEX", conflicts_with = "region")]
     monitor: Option<usize>,
+
+    /// Read only the window that has focus
+    #[arg(long, conflicts_with_all = ["region", "monitor"])]
+    focused: bool,
+}
+
+impl Area {
+    /// The part of the desktop to read, with `--focused` resolved to the
+    /// focused window's rectangle.
+    fn region(&self) -> Result<Option<Region>> {
+        if !self.focused {
+            return Ok(self.region);
+        }
+        Ok(Some(focused_window()?))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn focused_window() -> Result<Region> {
+    let placement = read::geometry::focused()?;
+    Ok(Region {
+        x: placement.x,
+        y: placement.y,
+        width: placement.width,
+        height: placement.height,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn focused_window() -> Result<Region> {
+    anyhow::bail!("--focused needs a compositor that reports window positions")
 }
 
 fn main() -> Result<()> {
@@ -251,17 +282,18 @@ fn run(steps: &[String], area: &Area) -> Result<()> {
 }
 
 fn scan(area: &Area) -> Result<Vec<Element>> {
+    let region = area.region()?;
     let elements = match controls(area) {
         Some(elements) => elements,
-        None => match daemon::ask(area.region, area.monitor) {
+        None => match daemon::ask(region, area.monitor) {
             Some(elements) => elements,
             None => {
-                let capture = capture::screen(area.monitor, area.region)?;
-                read::Engine::load()?.read(&capture)?
+                let capture = capture::screen(area.monitor, region)?;
+                let recognized = read::Engine::load()?.read(&capture)?;
+                with_tree_text(recognized)
             }
         },
     };
-    let elements = with_tree_text(elements);
     Snapshot::new(elements.clone())
         .save()
         .context("cannot cache this scan")?;
@@ -280,14 +312,40 @@ fn resolve(target: &str, fresh: bool, area: &Area) -> Result<Snapshot> {
     Ok(Snapshot::new(scan(area)?))
 }
 
-/// Replaces what was recognized with what the accessibility tree says, for the
-/// windows that expose one and that enough labels place on screen.
+/// Replaces what was recognized with what the accessibility tree says, using
+/// the compositor's window positions where it answers and matched labels where
+/// it does not.
 #[cfg(target_os = "linux")]
 fn with_tree_text(elements: Vec<Element>) -> Vec<Element> {
-    match read::atspi::windows() {
-        Ok(windows) if !windows.is_empty() => read::fuse::fuse(elements, &windows),
-        _ => elements,
+    let Ok(windows) = read::atspi::windows() else {
+        return elements;
+    };
+    if windows.is_empty() {
+        return elements;
     }
+
+    let Ok(placements) = read::geometry::windows() else {
+        return read::fuse::fuse(elements, &windows);
+    };
+
+    let located = read::fuse::place(&windows, &placements);
+    if located.is_empty() {
+        return read::fuse::fuse(elements, &windows);
+    }
+
+    let mut merged: Vec<Element> = elements
+        .into_iter()
+        .filter(|element| {
+            !located
+                .iter()
+                .any(|window| window.rect.contains(element.x, element.y))
+        })
+        .collect();
+    for window in located {
+        merged.extend(window.elements);
+    }
+    index::number(&mut merged);
+    merged
 }
 
 #[cfg(not(target_os = "linux"))]
