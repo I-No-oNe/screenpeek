@@ -1,6 +1,6 @@
 [package]
 name = "screenpeek"
-version = "0.0.1"
+version = "0.0.1-alpha"
 edition = "2021"
 rust-version = "1.75"
 description = "Read the screen as a numbered list of text elements, then click them by name"
@@ -32,6 +32,7 @@ memmap2 = "0.9"
 tempfile = "3"
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+x11rb = { version = "0.13", features = ["randr"] }
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 
 [target.'cfg(windows)'.dependencies]

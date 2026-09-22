@@ -2,16 +2,16 @@
 
 #[cfg(target_os = "linux")]
 pub mod wayland;
+#[cfg(target_os = "linux")]
+pub mod x11;
 
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 
-#[cfg(not(target_os = "linux"))]
-use anyhow::anyhow;
 #[cfg(not(target_os = "linux"))]
 use xcap::Monitor;
 
@@ -110,10 +110,19 @@ fn crop(capture: Capture, region: Region) -> Capture {
 
 #[cfg(target_os = "linux")]
 fn full_screen(monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
-    let mut screencopy = wayland::Screencopy::new()?;
-    match region {
-        Some(region) => screencopy.capture_containing(region),
-        None => screencopy.capture(monitor),
+    match wayland::Screencopy::new() {
+        Ok(mut screencopy) => match region {
+            Some(region) => screencopy.capture_containing(region),
+            None => screencopy.capture(monitor),
+        },
+        Err(wayland_error) => {
+            let mut screen = x11::Screen::new()
+                .map_err(|x11_error| anyhow!("{wayland_error}; and {x11_error}"))?;
+            match region {
+                Some(region) => screen.capture_containing(region),
+                None => screen.capture(monitor),
+            }
+        }
     }
 }
 
