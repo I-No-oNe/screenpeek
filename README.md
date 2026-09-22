@@ -15,10 +15,10 @@ $ screenpeek fill "Search" "hello world"
 ## Install and download
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/I-No-oNe/screenpeek/main/install.sh | sh
+sh install.sh
 ```
 
-That drops the latest release binary into `~/.local/bin`. Prebuilt Linux and Windows binaries are also attached to every tagged release on the [Releases page](https://github.com/I-No-oNe/screenpeek/releases).
+That drops the latest release binary into `~/.local/bin` (override with `PREFIX`). It uses `gh` when it is installed, which is what makes it work while the repository is private. Prebuilt Linux and Windows binaries are also attached to every tagged release on the [Releases page](https://github.com/I-No-oNe/screenpeek/releases).
 
 To build it instead, with Rust 1.75 or newer:
 
