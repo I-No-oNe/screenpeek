@@ -279,19 +279,22 @@ impl Pointer {
             }
             return Ok(());
         }
-        // Windows and X11 take Unicode text directly.
-        if !cfg!(target_os = "linux") || std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        // Windows takes Unicode text directly.
+        if !cfg!(target_os = "linux") {
             return self.enigo()?.text(text).context("cannot type text");
         }
+        // Reuse is measured on Wayland only; X11 keeps a keyboard per key.
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
         for character in text.chars() {
-            if self.enigo.is_none() || !plain(character) {
+            let reuse = wayland && plain(character);
+            if self.enigo.is_none() || !reuse {
                 self.enigo = Some(new_enigo()?);
                 sleep(KEYMAP_DELAY);
             }
             self.enigo()?
                 .text(character.encode_utf8(&mut [0; 4]))
                 .context("cannot type text")?;
-            if !plain(character) {
+            if !reuse {
                 self.enigo = None;
             }
         }
