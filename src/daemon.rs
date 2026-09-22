@@ -60,6 +60,9 @@ pub struct Request {
     /// can tell when the last one has gone. Zero where it cannot be told.
     #[serde(default)]
     pub session: u32,
+    /// A language to read with tesseract instead of the built-in model.
+    #[serde(default)]
+    pub lang: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -191,9 +194,20 @@ struct Session {
     engine: Engine,
     how: &'static str,
     #[cfg(target_os = "linux")]
-    fast: Option<capture::wayland::Screencopy>,
+    capturer: Capturer,
     previous: Option<Frame>,
     bands: HashMap<u64, Vec<Element>>,
+    #[cfg(target_os = "linux")]
+    tree: HashMap<(String, u32, u32), Vec<crate::read::atspi::Item>>,
+}
+
+/// How this session gets its pixels. The Wayland and X11 paths both keep a
+/// connection open; the portable one opens a fresh session per frame.
+#[cfg(target_os = "linux")]
+enum Capturer {
+    Wayland(capture::wayland::Screencopy),
+    X11(capture::x11::Screen),
+    Portable,
 }
 
 /// The last full-screen look and what recognition read out of it. Text that
@@ -203,6 +217,7 @@ struct Frame {
     key: u64,
     image: RgbaImage,
     pixels: Vec<Element>,
+    lang: Option<String>,
 }
 
 /// A window whose contents are known from its tree and whose position is
@@ -254,18 +269,21 @@ impl Session {
     fn new() -> Result<Session> {
         #[cfg(target_os = "linux")]
         {
-            let fast = capture::wayland::Screencopy::new();
-            let how = if fast.is_ok() {
-                "wlr-screencopy"
-            } else {
-                "portable capture"
+            let (capturer, how) = match capture::wayland::Screencopy::new() {
+                Ok(screencopy) => (Capturer::Wayland(screencopy), "wlr-screencopy"),
+                Err(_) => match capture::x11::Screen::new() {
+                    Ok(screen) => (Capturer::X11(screen), "x11"),
+                    Err(_) => (Capturer::Portable, "portable capture"),
+                },
             };
+
             Ok(Session {
                 engine: Engine::load()?,
                 how,
-                fast: fast.ok(),
+                capturer,
                 previous: None,
                 bands: HashMap::new(),
+                tree: HashMap::new(),
             })
         }
 
@@ -283,44 +301,59 @@ impl Session {
         let capture = self.capture(request.monitor)?;
         let captured = started.elapsed();
 
-        let located = self.located_windows();
         let key = context_key(request.monitor, capture.origin);
-        let reusable = self
+        let comparable = self
             .previous
             .as_ref()
             .filter(|frame| frame.key == key)
-            .filter(|frame| frame.image.dimensions() == capture.image.dimensions());
+            .filter(|frame| frame.lang == request.lang)
+            .filter(|frame| frame.image.dimensions() == capture.image.dimensions())
+            .is_some();
+
+        let changed = match (comparable, self.previous.as_ref()) {
+            (true, Some(frame)) => dirty_areas(&frame.image, &capture.image),
+            _ => Vec::new(),
+        };
+        let located = self.located_windows(&changed, capture.origin);
 
         let recognition = Instant::now();
-        let (pixels, what) = match reusable {
-            None => (self.engine.read(&capture)?, "full"),
-            Some(frame) => {
-                let changed = dirty_areas(&frame.image, &capture.image);
-                let unread = outside(&changed, &located, capture.origin);
+        // Another language means tesseract, which reads a whole image at a
+        // time, so the band and line caches have nothing to offer it.
+        let (pixels, what) = if let Some(language) = &request.lang {
+            (
+                crate::read::tesseract::read(&capture, language)?,
+                "tesseract",
+            )
+        } else {
+            match comparable.then_some(self.previous.as_ref()).flatten() {
+                None => (self.engine.read(&capture)?, "full"),
+                Some(frame) => {
+                    let unread = outside(&changed, &located, capture.origin);
 
-                if unread.is_empty() {
-                    (
-                        frame.pixels.clone(),
-                        if changed.is_empty() {
-                            "unchanged"
-                        } else {
-                            "window only"
-                        },
-                    )
-                } else if worth_patching(&unread, &capture.image) {
-                    let kept: Vec<Element> = frame
-                        .pixels
-                        .iter()
-                        .filter(|element| {
-                            let x = element.x - capture.origin.0;
-                            let y = element.y - capture.origin.1;
-                            !unread.iter().any(|area| area.contains(x, y))
-                        })
-                        .cloned()
-                        .collect();
-                    (self.patch(kept, &capture, &unread)?, "patched")
-                } else {
-                    (self.engine.read(&capture)?, "full")
+                    if unread.is_empty() {
+                        (
+                            frame.pixels.clone(),
+                            if changed.is_empty() {
+                                "unchanged"
+                            } else {
+                                "window only"
+                            },
+                        )
+                    } else if worth_patching(&unread, &capture.image) {
+                        let kept: Vec<Element> = frame
+                            .pixels
+                            .iter()
+                            .filter(|element| {
+                                let x = element.x - capture.origin.0;
+                                let y = element.y - capture.origin.1;
+                                !unread.iter().any(|area| area.contains(x, y))
+                            })
+                            .cloned()
+                            .collect();
+                        (self.patch(kept, &capture, &unread)?, "patched")
+                    } else {
+                        (self.engine.read(&capture)?, "full")
+                    }
                 }
             }
         };
@@ -338,6 +371,7 @@ impl Session {
             key,
             image: capture.image,
             pixels,
+            lang: request.lang.clone(),
         });
 
         Ok(match request.region {
@@ -350,15 +384,50 @@ impl Session {
     }
 
     /// Windows the accessibility tree describes and the compositor has placed.
-    /// Their text needs no recognition at all.
+    /// Their text needs no recognition at all, and a window whose pixels have
+    /// not changed is not walked again either.
     #[cfg(target_os = "linux")]
-    fn located_windows(&self) -> Vec<Located> {
+    fn located_windows(&mut self, changed: &[Region], origin: (i32, i32)) -> Vec<Located> {
         let Ok(placements) = crate::read::geometry::windows() else {
             return Vec::new();
         };
-        let Ok(windows) = crate::read::atspi::windows() else {
+
+        let touched = |window: &crate::read::atspi::Window| {
+            let Some(placement) = placements.iter().find(|placement| {
+                placement.title == window.title
+                    || (placement.width == window.width && placement.height == window.height)
+            }) else {
+                return true;
+            };
+
+            changed.iter().any(|area| {
+                let left = area.x + origin.0;
+                let top = area.y + origin.1;
+                left < placement.x + placement.width as i32
+                    && left + area.width as i32 > placement.x
+                    && top < placement.y + placement.height as i32
+                    && top + area.height as i32 > placement.y
+            })
+        };
+
+        let known = &self.tree;
+        let Ok(mut windows) = crate::read::atspi::windows_where(|window| {
+            !known.contains_key(&(window.title.clone(), window.width, window.height))
+                || touched(window)
+        }) else {
             return Vec::new();
         };
+
+        for window in &mut windows {
+            let key = (window.title.clone(), window.width, window.height);
+            if window.items.is_empty() {
+                if let Some(remembered) = self.tree.get(&key) {
+                    window.items = remembered.clone();
+                }
+            } else {
+                self.tree.insert(key, window.items.clone());
+            }
+        }
 
         crate::read::fuse::place(&windows, &placements)
             .into_iter()
@@ -370,19 +439,27 @@ impl Session {
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn located_windows(&self) -> Vec<Located> {
+    fn located_windows(&mut self, _changed: &[Region], _origin: (i32, i32)) -> Vec<Located> {
         Vec::new()
     }
 
     fn capture(&mut self, monitor: Option<usize>) -> Result<Capture> {
         #[cfg(target_os = "linux")]
-        if let Some(fast) = self.fast.as_mut() {
-            match fast.capture(monitor) {
-                Ok(capture) => return Ok(capture),
-                Err(error) => {
-                    eprintln!("screenpeek: screencopy failed, falling back: {error}");
-                    self.fast = None;
+        {
+            let held = match &mut self.capturer {
+                Capturer::Wayland(screencopy) => Some(screencopy.capture(monitor)),
+                Capturer::X11(screen) => Some(screen.capture(monitor)),
+                Capturer::Portable => None,
+            };
+
+            match held {
+                Some(Ok(capture)) => return Ok(capture),
+                Some(Err(error)) => {
+                    eprintln!("screenpeek: {} failed, falling back: {error}", self.how);
+                    self.capturer = Capturer::Portable;
+                    self.how = "portable capture";
                 }
+                None => {}
             }
         }
         capture::screen(monitor, None)
@@ -550,7 +627,11 @@ fn context_key(monitor: Option<usize>, origin: (i32, i32)) -> u64 {
 
 /// Asks a running daemon to look, starting one if there is none. `None` means
 /// the daemon could not be reached and the caller should do the work itself.
-pub fn ask(region: Option<Region>, monitor: Option<usize>) -> Option<Vec<Element>> {
+pub fn ask(
+    region: Option<Region>,
+    monitor: Option<usize>,
+    lang: Option<String>,
+) -> Option<Vec<Element>> {
     let mut stream = match connect() {
         Some(stream) => stream,
         None => {
@@ -565,6 +646,7 @@ pub fn ask(region: Option<Region>, monitor: Option<usize>) -> Option<Vec<Element
         region,
         monitor,
         session: owning_session(),
+        lang,
     };
     let mut line = serde_json::to_vec(&request).ok()?;
     line.push(b'\n');
