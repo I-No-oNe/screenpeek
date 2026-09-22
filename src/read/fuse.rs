@@ -1,7 +1,7 @@
 //! Place accessibility labels using window geometry or matching OCR text.
 
 use super::atspi::Window;
-use super::geometry::Placement;
+use super::Placement;
 use crate::capture::Region;
 use crate::index::{self, Element, Source};
 
@@ -61,12 +61,7 @@ pub fn place(windows: &[Window], placements: &[Placement]) -> Vec<Placed> {
 
         placed.push(Placed {
             key: Some((window.title.clone(), window.width, window.height)),
-            rect: Region {
-                x: placement.x,
-                y: placement.y,
-                width: placement.width,
-                height: placement.height,
-            },
+            rect: placement.rect(),
             elements: window
                 .items
                 .iter()

@@ -43,15 +43,22 @@ impl Screen {
         self.capture_area(area)
     }
 
-    /// Captures the monitor a region starts on.
+    /// Captures the part of a region on the monitor it starts on.
     pub fn capture_containing(&mut self, region: Region) -> Result<Capture> {
-        let area = self
+        let monitor = self
             .monitors
             .iter()
             .find(|monitor| monitor.contains(region.x, region.y))
             .copied()
             .ok_or_else(|| anyhow!("no monitor contains {},{}", region.x, region.y))?;
-        self.capture_area(area)
+        let right = (region.x + region.width as i32).min(monitor.x + monitor.width as i32);
+        let bottom = (region.y + region.height as i32).min(monitor.y + monitor.height as i32);
+        self.capture_area(Region {
+            x: region.x,
+            y: region.y,
+            width: (right - region.x) as u32,
+            height: (bottom - region.y) as u32,
+        })
     }
 
     fn capture_area(&self, area: Region) -> Result<Capture> {
@@ -77,8 +84,7 @@ impl Screen {
     }
 }
 
-/// X sends 32 bits per pixel in this format, blue first, with the top byte
-/// unused.
+/// X sends BGRX pixels.
 fn to_rgba(data: &[u8], width: u32, height: u32) -> Result<RgbaImage> {
     let expected = width as usize * height as usize * 4;
     if data.len() < expected {

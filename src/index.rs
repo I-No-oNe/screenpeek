@@ -21,7 +21,6 @@ pub enum Source {
     Tree,
 }
 
-/// One line of text found on screen.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Element {
     /// Position in the scan, from the top left of the screen.
@@ -32,8 +31,6 @@ pub struct Element {
     pub y: i32,
     pub width: u32,
     pub height: u32,
-    /// Absent in a cache written before this field existed, which reads as
-    /// recognized text.
     #[serde(default)]
     pub source: Source,
 }
@@ -65,10 +62,8 @@ fn same_control(pixel: &Element, control: &Element) -> bool {
         && (pixel_text.contains(&tree_text) || tree_text.contains(&pixel_text))
 }
 
-/// One saved scan.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Snapshot {
-    /// Seconds since the Unix epoch.
     pub taken_at: u64,
     pub elements: Vec<Element>,
 }
@@ -154,7 +149,6 @@ impl Snapshot {
         bail!("nothing on screen matches {query:?}")
     }
 
-    /// Whether this snapshot can answer a query.
     pub fn can_resolve(&self, query: &str) -> bool {
         self.find(query).is_ok()
     }
@@ -166,8 +160,7 @@ fn fold(text: &str) -> String {
     let mut last_space = true;
 
     for character in text.nfkd().flat_map(char::to_lowercase) {
-        // Combining marks carry the accents, niqqud and harakat that a query
-        // rarely repeats; the joining controls carry nothing at all.
+        // Drop accents, niqqud, harakat and joining controls.
         if is_combining_mark(character)
             || matches!(character, '\u{0640}' | '\u{200C}' | '\u{200D}' | '\u{00AD}')
         {
@@ -181,7 +174,6 @@ fn fold(text: &str) -> String {
             continue;
         }
         last_space = false;
-        // The ligatures are two letters that a query almost always spells out.
         if let Some(spelled) = match character {
             'æ' => Some("ae"),
             'œ' => Some("oe"),
@@ -206,7 +198,6 @@ fn fold(text: &str) -> String {
     folded.replace("rn", "m").trim().to_owned()
 }
 
-/// Sorts elements into reading order and renumbers them.
 pub fn number(elements: &mut [Element]) {
     elements.sort_by_key(|element| (element.y, element.x));
     for (id, element) in elements.iter_mut().enumerate() {

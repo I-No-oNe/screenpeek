@@ -15,8 +15,7 @@ pub struct Portal {
 impl Portal {
     pub fn new() -> Result<Portal> {
         let connection = Connection::session().context("no session bus")?;
-        // Ask for the interface's version, which fails when no portal is
-        // running rather than when the first capture is wanted.
+        // Fail early when no screenshot portal is running.
         let _: u32 = connection
             .call_method(
                 Some("org.freedesktop.portal.Desktop"),
@@ -35,13 +34,10 @@ impl Portal {
         Ok(Portal { connection })
     }
 
-    /// One screenshot of the whole desktop, in its own pixels.
     pub fn capture(&mut self) -> Result<Capture> {
         let token = format!("screenpeek{}", std::process::id());
         let mut options: HashMap<&str, Value> = HashMap::new();
         options.insert("handle_token", Value::from(token.as_str()));
-        // Neither a dialog nor a modal parent: a scan is not a moment for
-        // either, and a desktop that insists will remember the answer.
         options.insert("interactive", Value::from(false));
         options.insert("modal", Value::from(false));
 
@@ -59,7 +55,6 @@ impl Portal {
         let image = image::open(&path)
             .with_context(|| format!("cannot read the portal's screenshot at {path:?}"))?
             .into_rgba8();
-        // The portal hands the file over; nobody else is going to remove it.
         let _ = fs::remove_file(&path);
 
         // Normalize screenshot pixels to logical desktop coordinates before OCR.

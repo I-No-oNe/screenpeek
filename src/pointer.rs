@@ -76,7 +76,6 @@ fn named(key: &str) -> Result<Key> {
         "down" => Key::DownArrow,
         "left" => Key::LeftArrow,
         "right" => Key::RightArrow,
-        // Accept common punctuation names in shortcuts.
         "slash" => Key::Unicode('/'),
         "backslash" => Key::Unicode('\\'),
         "minus" | "dash" | "hyphen" => Key::Unicode('-'),
@@ -133,8 +132,8 @@ impl Pointer {
     pub fn new() -> Result<Pointer> {
         #[cfg(target_os = "linux")]
         if std::env::var("SCREENPEEK_INPUT").as_deref() == Ok("portal")
-            || (crate::capture::wayland::logical_desktop().is_some()
-                && crate::capture::wayland::Screencopy::new().is_err())
+            || (crate::capture::wayland::Screencopy::new().is_err()
+                && crate::capture::wayland::logical_desktop().is_some())
         {
             return Ok(Pointer {
                 enigo: None,
@@ -165,7 +164,6 @@ impl Pointer {
         Ok(())
     }
 
-    /// Presses a named key, or a combination such as `ctrl+s`.
     pub fn press(&mut self, combination: &str) -> Result<()> {
         let mut parts: Vec<&str> = combination.split('+').map(str::trim).collect();
         let key = parts.pop().context("no key given")?;
@@ -254,8 +252,6 @@ mod tests {
         assert!(named("nonsense").is_err());
     }
 
-    /// `/` focuses search in most web applications, and spelling the key out
-    /// is what anyone tries first.
     #[test]
     fn punctuation_has_names_as_well_as_characters() {
         for (name, character) in [

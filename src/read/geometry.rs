@@ -8,22 +8,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
-/// i3 and Sway prefix every message with this.
+use super::Placement;
+
 const I3_MAGIC: &[u8; 6] = b"i3-ipc";
 
-/// The i3 message that asks for the window tree.
 const I3_GET_TREE: u32 = 4;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Placement {
-    pub title: String,
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
-    pub focused: bool,
-    pub pid: Option<u32>,
-}
 
 /// Every mapped window, or an error when nothing can be asked.
 pub fn windows() -> Result<Vec<Placement>> {
@@ -39,25 +28,7 @@ pub fn windows() -> Result<Vec<Placement>> {
     x11()
 }
 
-/// Return sorted window edges for splitting adjacent controls, or none if unavailable.
-pub fn edges() -> Vec<i32> {
-    edges_of(&windows().unwrap_or_default())
-}
-
-/// The same, from a window list already in hand, so a caller that needs both
-/// asks the compositor once.
-pub fn edges_of(placements: &[Placement]) -> Vec<i32> {
-    let mut edges: Vec<i32> = placements
-        .iter()
-        .flat_map(|window| [window.x, window.x + window.width as i32])
-        .collect();
-    edges.sort_unstable();
-    edges.dedup();
-    edges
-}
-
-/// On X11 every window manager publishes the same properties on the root, so
-/// this works whatever is running.
+/// EWMH root properties, set by every X11 window manager.
 fn x11() -> Result<Vec<Placement>> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, MapState};
@@ -171,14 +142,6 @@ fn text_property(
     Ok(Some(String::from_utf8_lossy(&reply.value).into_owned()))
 }
 
-/// The window the keyboard is on.
-pub fn focused() -> Result<Placement> {
-    windows()?
-        .into_iter()
-        .find(|placement| placement.focused)
-        .ok_or_else(|| anyhow!("no window has focus"))
-}
-
 fn hyprland(socket: &Path) -> Result<Vec<Placement>> {
     let clients: Vec<HyprlandClient> = serde_json::from_str(&hyprland_ask(socket, "j/clients")?)?;
     // Skip hidden workspaces before placing trees or excluding the caller.
@@ -262,8 +225,7 @@ fn sway(socket: &Path) -> Result<Vec<Placement>> {
     Ok(placements)
 }
 
-/// One request and one reply over the i3 protocol: the magic string, the
-/// payload length and the message type, all in native byte order.
+/// One i3 IPC request/reply.
 fn i3_request(socket: &Path, message: u32) -> Result<String> {
     let mut connection = UnixStream::connect(socket).context("cannot reach Sway")?;
 
@@ -371,27 +333,6 @@ mod tests {
         assert!(!placements[1].focused);
     }
 
-    /// Hidden workspace geometry must not mask the visible window.
-    #[test]
-    fn windows_on_other_workspaces_are_left_out() {
-        let json = r#"[
-            {"title":"Gmail","at":[12,12],"size":[1512,840],"mapped":true,
-             "focusHistoryID":0,"pid":10,"workspace":{"id":2}},
-            {"title":"Terminal","at":[12,12],"size":[1512,840],"mapped":true,
-             "focusHistoryID":1,"pid":11,"workspace":{"id":1}}
-        ]"#;
-        let clients: Vec<HyprlandClient> = serde_json::from_str(json).unwrap();
-        let shown = [2];
-        let visible: Vec<Placement> = clients
-            .into_iter()
-            .filter(|client| shown.contains(&client.workspace.id))
-            .filter_map(placement_of)
-            .collect();
-
-        assert_eq!(visible.len(), 1);
-        assert_eq!(visible[0].title, "Gmail");
-    }
-
     /// Trimmed from a real `swaymsg -t get_tree`: a workspace holding one
     /// tiled window and one floating one, plus a container with no surface.
     const SWAY_TREE: &str = r#"{
@@ -462,23 +403,5 @@ mod tests {
         )
         .unwrap();
         assert!(sway_placement(&node).is_none());
-    }
-
-    /// Needs a running compositor, so it is not part of the normal run.
-    #[test]
-    #[ignore = "needs a live session; run cargo test --release window_edges -- --ignored --nocapture"]
-    fn window_edges_come_back_from_the_compositor() {
-        let placements = windows().expect("a compositor to ask");
-        let edges = edges();
-        println!("{} window(s), edges {edges:?}", placements.len());
-        assert!(!edges.is_empty(), "a mapped window has two edges");
-        for window in &placements {
-            assert!(edges.contains(&window.x), "{window:?} left edge missing");
-            assert!(
-                edges.contains(&(window.x + window.width as i32)),
-                "{window:?} right edge missing"
-            );
-        }
-        assert!(edges.windows(2).all(|pair| pair[0] < pair[1]), "sorted");
     }
 }

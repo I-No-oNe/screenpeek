@@ -8,13 +8,15 @@ const visible = {
     minimized: false, located_on_workspace: () => true,
     showing_on_its_workspace: () => true, get_client_content_rect: () => rect,
     get_title: () => 'Editor', has_focus: () => true, get_pid: () => 42,
+    get_window_type: () => 0,
 };
 const source = read('helpers/gnome/extension.js').replace(/^import .*;$/gm, '')
     .replace('export default class Screenpeek', 'globalThis.Screenpeek = class Screenpeek');
-const context = {Extension: class {}, global: {
+const context = {Extension: class {}, Meta: {WindowType: {NORMAL: 0, DIALOG: 4, DESKTOP: 1}}, global: {
     workspace_manager: {get_active_workspace: () => ({})},
     get_window_actors: () => [visible, {...visible, minimized: true},
-        {...visible, located_on_workspace: () => false}].map(meta_window => ({meta_window})),
+        {...visible, located_on_workspace: () => false},
+        {...visible, get_window_type: () => 1}].map(meta_window => ({meta_window})),
 }};
 vm.runInNewContext(source, context);
 let windows = JSON.parse(new context.Screenpeek().List());
@@ -34,7 +36,7 @@ vm.runInNewContext(read('helpers/kwin/windows.js'), {
     SCREENPEEK_CALLBACK: ':1.123',
     workspace: {currentDesktop: 1, currentActivity: 'work', activeWindow: active,
         windowList: () => [active, {...active, desktops: [2]}, {...active, minimized: true},
-            {...active, activities: ['other']}]},
+            {...active, activities: ['other']}, {...active, specialWindow: true}]},
     callDBus: (...args) => { callback = args; },
 });
 assert.deepEqual(callback.slice(0, 4), [':1.123', '/org/screenpeek/Windows', 'org.screenpeek.Windows', 'Reply']);
@@ -42,4 +44,3 @@ windows = JSON.parse(callback[4]);
 assert.equal(windows.length, 1);
 assert.deepEqual(windows[0].at, [-800, 20]);
 assert.equal(windows[0].focusHistoryID, 0);
-console.log('GNOME and KWin helper contract checks passed (mock compositor objects).');

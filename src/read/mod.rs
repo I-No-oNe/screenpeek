@@ -26,8 +26,50 @@ use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
 use rten::Model;
 use rten_imageproc::{bounding_rect, BoundingRect, Rect, RotatedRect};
 
-use crate::capture::Capture;
+use crate::capture::{Capture, Region};
 use crate::index::{Element, Source};
+
+/// A visible window as the compositor reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placement {
+    pub title: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub focused: bool,
+    pub pid: Option<u32>,
+}
+
+impl Placement {
+    pub fn rect(&self) -> Region {
+        Region {
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
+/// Visible windows, or none when the compositor cannot be asked.
+pub fn placements() -> Vec<Placement> {
+    #[cfg(target_os = "linux")]
+    return geometry::windows().unwrap_or_default();
+    #[cfg(not(target_os = "linux"))]
+    Vec::new()
+}
+
+/// Sorted window edges, where recognition must stop joining text.
+pub fn edges(placements: &[Placement]) -> Vec<i32> {
+    let mut edges: Vec<i32> = placements
+        .iter()
+        .flat_map(|window| [window.x, window.x + window.width as i32])
+        .collect();
+    edges.sort_unstable();
+    edges.dedup();
+    edges
+}
 
 const MODEL_BASE_URL: &str = "https://ocrs-models.s3-accelerate.amazonaws.com";
 const DETECTION_MODEL: &str = "text-detection.rten";
@@ -36,8 +78,7 @@ const RECOGNITION_MODEL: &str = "text-recognition.rten";
 /// The models are ~12 MB together; anything larger is an error page.
 const MAX_MODEL_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Lines already read are remembered by their pixels. A list that scrolls by
-/// one row then costs one line of recognition instead of a screenful.
+/// Lines are cached by pixels, so scrolling re-reads only new lines.
 const LINE_CACHE_SIZE: usize = 4096;
 
 pub struct Engine {
@@ -88,8 +129,6 @@ impl Engine {
     pub(crate) fn clear_cache_for_test(&self) {
         *self.lines.lock().unwrap() = Lines::default();
     }
-
-    /// Loads the OCR models, downloading them if this is the first run.
     pub fn load() -> Result<Engine> {
         // Memory-map models; atomic file replacement keeps existing mappings valid.
         let detection = unsafe { Model::load_mmap(model_file(DETECTION_MODEL)?) }
@@ -110,7 +149,6 @@ impl Engine {
         })
     }
 
-    /// Reads a capture into numbered elements in desktop coordinates.
     #[cfg(test)]
     pub fn read(&self, capture: &Capture) -> Result<Vec<Element>> {
         self.read_scaled(capture, 1)
@@ -127,8 +165,6 @@ impl Engine {
 
     fn read_inner(&self, capture: &Capture, scale: u32, edges: &[i32]) -> Result<Vec<Element>> {
         let scale = scale.max(1);
-        // ocrs takes RGBA as it comes, so the common path hands it the capture
-        // without copying or converting anything.
         let scaled;
         let pixels = if scale == 1 {
             &capture.image
@@ -153,8 +189,7 @@ impl Engine {
             .inner
             .detect_words(&input)
             .map_err(|err| anyhow!("text detection failed: {err}"))?;
-        // Desktop coordinates on the way in, this image's pixels on the way
-        // out, so a cropped band uses the same list as a whole screen.
+        // Edges arrive in desktop coordinates; convert to image pixels.
         let local: Vec<f32> = edges
             .iter()
             .map(|edge| ((edge - capture.origin.0) * scale as i32) as f32)
@@ -247,8 +282,7 @@ fn separate_controls(lines: &[Vec<RotatedRect>], edges: &[f32]) -> Vec<Vec<Rotat
         .collect()
 }
 
-/// A line is identified by the pixels under it, so the same line matches
-/// wherever it has moved to.
+/// Key a line by its pixels, independent of position.
 fn line_key(image: &image::RgbaImage, line: &[RotatedRect]) -> (u64, Rect) {
     let rect = bounding_rect(line.iter())
         .map(|rect| {
@@ -275,7 +309,6 @@ fn line_key(image: &image::RgbaImage, line: &[RotatedRect]) -> (u64, Rect) {
     (hasher.finish(), rect)
 }
 
-/// The path to a model, fetching it on first use.
 fn model_file(name: &str) -> Result<PathBuf> {
     let path = dirs::cache_dir()
         .ok_or_else(|| anyhow!("no cache directory on this system"))?
@@ -308,7 +341,6 @@ fn download(url: &str, path: &Path) -> Result<()> {
         bail!("the download was empty");
     }
 
-    // Rename into place so an interrupted download leaves no half-written model.
     let partial = path.with_extension("partial");
     fs::write(&partial, &body).with_context(|| format!("cannot write {}", partial.display()))?;
     fs::rename(&partial, path).with_context(|| format!("cannot write {}", path.display()))

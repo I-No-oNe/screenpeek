@@ -90,7 +90,6 @@ fn patch_preserves_duplicate_bands_across_cache_eviction() {
             .collect(),
         #[cfg(target_os = "linux")]
         capturer: capture::Backend::Portal,
-        #[cfg(target_os = "linux")]
         tree: HashMap::new(),
         covered: HashMap::new(),
     };
@@ -135,7 +134,6 @@ fn fixture_scan_scenarios() {
         bands: HashMap::new(),
         #[cfg(target_os = "linux")]
         capturer: capture::Backend::Portal,
-        #[cfg(target_os = "linux")]
         tree: HashMap::new(),
         covered: HashMap::new(),
     };

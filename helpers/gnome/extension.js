@@ -1,4 +1,5 @@
 import Gio from 'gi://Gio';
+import Meta from 'gi://Meta';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const SERVICE = 'org.screenpeek.Windows';
@@ -20,6 +21,7 @@ export default class Screenpeek extends Extension {
         return JSON.stringify(global.get_window_actors()
             .map(actor => actor.meta_window)
             .filter(window => !window.minimized && window.located_on_workspace(workspace)
+                && [Meta.WindowType.NORMAL, Meta.WindowType.DIALOG].includes(window.get_window_type())
                 && window.showing_on_its_workspace())
             .map(window => {
                 // Newer Mutter exposes the exact AT-SPI origin; older versions use the client rect.

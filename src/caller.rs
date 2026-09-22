@@ -1,5 +1,5 @@
 //! Keep the invoking terminal out of scans and cached click targets.
-use crate::{capture::Region, index::Element};
+use crate::{capture::Region, index::Element, read::Placement};
 
 pub fn filter(elements: &mut Vec<Element>, excluded: &[Region]) {
     elements.retain(|element| {
@@ -9,22 +9,16 @@ pub fn filter(elements: &mut Vec<Element>, excluded: &[Region]) {
     });
 }
 
+/// The windows of the terminal that launched this command, found by walking
+/// up the process tree to the first ancestor that owns a visible window.
 #[cfg(target_os = "linux")]
-pub fn regions() -> Vec<Region> {
-    let Ok(windows) = crate::read::geometry::windows() else {
-        return Vec::new();
-    };
+pub fn regions(windows: &[Placement]) -> Vec<Region> {
     let mut pid = std::process::id();
     for _ in 0..64 {
         let matches: Vec<_> = windows
             .iter()
             .filter(|window| window.pid == Some(pid))
-            .map(|window| Region {
-                x: window.x,
-                y: window.y,
-                width: window.width,
-                height: window.height,
-            })
+            .map(Placement::rect)
             .collect();
         if !matches.is_empty() {
             return matches;
@@ -55,7 +49,7 @@ fn parent_pid(stat: &str) -> Option<u32> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn regions() -> Vec<Region> {
+pub fn regions(_windows: &[Placement]) -> Vec<Region> {
     Vec::new()
 }
 

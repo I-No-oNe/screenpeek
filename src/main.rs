@@ -152,30 +152,17 @@ struct Area {
 }
 
 impl Area {
-    /// The part of the desktop to read, with `--focused` resolved to the
-    /// focused window's rectangle.
-    fn region(&self) -> Result<Option<Region>> {
+    /// The part of the desktop to read, with `--focused` resolved.
+    fn region(&self, windows: &[read::Placement]) -> Result<Option<Region>> {
         if !self.focused {
             return Ok(self.region);
         }
-        Ok(Some(focused_window()?))
+        windows
+            .iter()
+            .find(|window| window.focused)
+            .map(|window| Some(window.rect()))
+            .context("--focused needs a compositor that reports the focused window")
     }
-}
-
-#[cfg(target_os = "linux")]
-fn focused_window() -> Result<Region> {
-    let placement = read::geometry::focused()?;
-    Ok(Region {
-        x: placement.x,
-        y: placement.y,
-        width: placement.width,
-        height: placement.height,
-    })
-}
-
-#[cfg(not(target_os = "linux"))]
-fn focused_window() -> Result<Region> {
-    anyhow::bail!("--focused needs a compositor that reports window positions")
 }
 
 fn main() -> Result<()> {
@@ -283,7 +270,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Read through the platform tree, daemon, or direct OCR.
 fn run(steps: &[String], area: &Area) -> Result<()> {
     let mut pointer = Pointer::new()?;
     let mut snapshot: Option<Snapshot> = None;
@@ -335,9 +321,10 @@ fn run(steps: &[String], area: &Area) -> Result<()> {
 }
 
 fn scan(area: &Area) -> Result<Vec<Element>> {
-    let region = area.region()?;
+    let windows = read::placements();
+    let region = area.region(&windows)?;
     let language = resolve_language(area.lang.as_deref())?;
-    let excluded = caller::regions();
+    let excluded = caller::regions(&windows);
     let mut elements = match controls(area) {
         Some(elements) => elements,
         None => match daemon::ask(region, area.monitor, language.clone(), excluded.clone()) {
@@ -347,13 +334,12 @@ fn scan(area: &Area) -> Result<Vec<Element>> {
                 capture.exclude(&excluded);
                 let recognized = match &language {
                     Some(language) => read::tesseract::read(&capture, language)?,
-                    None => read::Engine::load()?.read_within(&capture, &window_edges())?,
+                    None => read::Engine::load()?.read_within(&capture, &read::edges(&windows))?,
                 };
-                with_tree_text(recognized)
+                with_tree_text(recognized, &windows)
             }
         },
     };
-    // Clip all results before numbering and caching so scoped clicks stay inside the region.
     if let Some(region) = region {
         elements.retain(|element| region.contains(element.x, element.y));
         index::number(&mut elements);
@@ -369,7 +355,10 @@ fn scan(area: &Area) -> Result<Vec<Element>> {
 fn resolve(target: &str, fresh: bool, area: &Area) -> Result<Snapshot> {
     if !fresh && area.region.is_none() && area.monitor.is_none() && !area.focused {
         if let Some(mut snapshot) = Snapshot::load() {
-            caller::filter(&mut snapshot.elements, &caller::regions());
+            caller::filter(
+                &mut snapshot.elements,
+                &caller::regions(&read::placements()),
+            );
             if snapshot.can_resolve(target) {
                 return Ok(snapshot);
             }
@@ -399,20 +388,7 @@ fn resolve_language(requested: Option<&str>) -> Result<Option<String>> {
     Ok(read::language::detect(&known_text(), &installed))
 }
 
-/// Where the compositor says windows end, so recognition can tell neighbouring
-/// controls apart. Nothing to offer when there is no compositor to ask.
-#[cfg(target_os = "linux")]
-fn window_edges() -> Vec<i32> {
-    read::geometry::edges()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn window_edges() -> Vec<i32> {
-    Vec::new()
-}
-
-/// Text the platform hands over without recognition, which is what the
-/// language guess is made from.
+/// Accessible text, which is what `--lang auto` guesses from.
 #[cfg(target_os = "linux")]
 fn known_text() -> Vec<Element> {
     let Ok(windows) = read::atspi::windows() else {
@@ -445,34 +421,23 @@ fn known_text() -> Vec<Element> {
 
 /// Place tree labels using compositor geometry or matching OCR text.
 #[cfg(target_os = "linux")]
-fn with_tree_text(elements: Vec<Element>) -> Vec<Element> {
-    let Ok(windows) = read::atspi::windows() else {
-        return elements;
+fn with_tree_text(elements: Vec<Element>, placements: &[read::Placement]) -> Vec<Element> {
+    let windows = match read::atspi::windows() {
+        Ok(windows) if !windows.is_empty() => windows,
+        _ => return elements,
     };
-    if windows.is_empty() {
-        return elements;
-    }
-
-    let Ok(placements) = read::geometry::windows() else {
+    if placements.is_empty() {
         return read::fuse::fuse(elements, &windows);
-    };
-
-    let located = read::fuse::place(&windows, &placements);
-    if located.is_empty() {
-        return elements;
     }
-
-    index::merge_tree(
-        elements,
-        located
-            .into_iter()
-            .flat_map(|window| window.elements)
-            .collect(),
-    )
+    let located = read::fuse::place(&windows, placements)
+        .into_iter()
+        .flat_map(|window| window.elements)
+        .collect();
+    index::merge_tree(elements, located)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn with_tree_text(elements: Vec<Element>) -> Vec<Element> {
+fn with_tree_text(elements: Vec<Element>, _placements: &[read::Placement]) -> Vec<Element> {
     elements
 }
 
@@ -500,8 +465,7 @@ fn controls(_area: &Area) -> Option<Vec<Element>> {
     None
 }
 
-/// Writes the listing, treating a closed pipe as the end of the work rather
-/// than as a failure, so `screenpeek scan | head` is quiet.
+/// Print the listing; a closed pipe (`scan | head`) is not an error.
 fn print(elements: &[&Element], json: bool) -> Result<()> {
     use std::io::Write;
 

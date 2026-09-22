@@ -1,6 +1,6 @@
 // Screenpeek substitutes the callback bus name before loading this one-shot script.
 const windows = workspace.windowList()
-    .filter(window => !window.minimized && !window.deleted
+    .filter(window => !window.minimized && !window.deleted && !window.specialWindow
         && (window.onAllDesktops || window.desktops.includes(workspace.currentDesktop))
         && (window.activities.length === 0 || window.activities.includes(workspace.currentActivity)))
     .map(window => {

@@ -8,7 +8,6 @@ on:
       tag:
         description: Tag to publish the binaries against
         required: true
-        default: v0.0.1-alpha
 
 permissions:
   contents: write

@@ -25,7 +25,6 @@ use wayland_protocols_wlr::screencopy::v1::client::{
 
 use super::{Capture, Region};
 
-/// A persistent capture session for one output.
 pub struct Screencopy {
     queue: EventQueue<State>,
     state: State,
@@ -161,7 +160,6 @@ impl Screencopy {
         })
     }
 
-    /// Captures an output, indexed as the compositor announced them.
     pub fn capture(&mut self, monitor: Option<usize>) -> Result<Capture> {
         self.capture_part(monitor.unwrap_or(0), None)
     }
@@ -227,7 +225,6 @@ impl Screencopy {
         })
     }
 
-    /// Captures the output a region starts on.
     pub fn capture_containing(&mut self, region: Region) -> Result<Capture> {
         let index = self
             .state
@@ -248,8 +245,7 @@ impl Screencopy {
             })
             .ok_or_else(|| anyhow!("no output contains {},{}", region.x, region.y))?;
 
-        // Older compositors may not implement the region request; a whole
-        // output still answers the question, just with more pixels.
+        // Fall back to the whole output if region capture is unsupported.
         match self.capture_part(index, Some(region)) {
             Ok(capture) => Ok(capture),
             Err(error) => {
@@ -259,7 +255,6 @@ impl Screencopy {
         }
     }
 
-    /// Reuses the buffer unless the output was reconfigured.
     fn ensure_buffer(
         &mut self,
         format: wl_shm::Format,
@@ -310,25 +305,28 @@ impl Screencopy {
 
 impl Buffer {
     fn to_image(&self) -> Result<RgbaImage> {
-        let mut image = RgbaImage::new(self.width, self.height);
-        let swap_red_and_blue = matches!(
+        let swap = matches!(
             self.format,
             wl_shm::Format::Xrgb8888 | wl_shm::Format::Argb8888
         );
-
-        for y in 0..self.height as usize {
-            let row = &self.map[y * self.stride as usize..][..self.width as usize * 4];
-            for x in 0..self.width as usize {
-                let pixel = &row[x * 4..x * 4 + 4];
-                let (r, g, b) = if swap_red_and_blue {
-                    (pixel[2], pixel[1], pixel[0])
+        let row_bytes = self.width as usize * 4;
+        let mut pixels = Vec::with_capacity(row_bytes * self.height as usize);
+        for row in self
+            .map
+            .chunks(self.stride as usize)
+            .take(self.height as usize)
+        {
+            for pixel in row[..row_bytes].as_chunks::<4>().0 {
+                let [r, g, b] = if swap {
+                    [pixel[2], pixel[1], pixel[0]]
                 } else {
-                    (pixel[0], pixel[1], pixel[2])
+                    [pixel[0], pixel[1], pixel[2]]
                 };
-                image.put_pixel(x as u32, y as u32, image::Rgba([r, g, b, 255]));
+                pixels.extend_from_slice(&[r, g, b, 255]);
             }
         }
-        Ok(image)
+        RgbaImage::from_raw(self.width, self.height, pixels)
+            .ok_or_else(|| anyhow!("the capture is malformed"))
     }
 }
 

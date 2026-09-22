@@ -4,8 +4,7 @@ use std::env;
 
 use crate::index::Element;
 
-/// Locale language to tesseract code, for the languages whose data is
-/// commonly installed.
+/// Locale code to Tesseract code.
 const LOCALES: &[(&str, &str)] = &[
     ("af", "afr"),
     ("am", "amh"),
@@ -237,8 +236,7 @@ fn locale_language(locale: &str) -> Option<&'static str> {
         .map(|(_, language)| *language)
 }
 
-/// The scripts present in text that is already known, which on Linux and
-/// Windows is whatever the accessibility tree reported.
+/// Scripts present in accessible text.
 fn scripts_in(elements: &[Element]) -> Vec<Script> {
     let mut seen: Vec<Script> = Vec::new();
     for character in elements.iter().flat_map(|element| element.text.chars()) {

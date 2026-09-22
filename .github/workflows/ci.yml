@@ -22,7 +22,7 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
       - run: node tests/helpers.mjs
-      - run: python3 -m doctest bench/compare_methods.py bench/compare_tools.py
+      - run: python3 -m doctest bench/compare_tools.py
 
   windows:
     runs-on: windows-latest

@@ -5,9 +5,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use zbus::blocking::connection::Builder;
-use zbus::blocking::{Connection, Proxy};
-use zbus::names::BusName;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath};
+use zbus::blocking::Connection;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 const REGISTRY: &str = "org.a11y.atspi.Registry";
 const ROOT: &str = "/org/a11y/atspi/accessible/root";
@@ -17,7 +16,7 @@ const COMPONENT: &str = "org.a11y.atspi.Component";
 /// Window-relative coordinates, as the toolkit reports them.
 const COORDS_WINDOW: u32 = 1;
 
-/// Walking is breadth-first and bounded: a deep tree is not worth a slow scan.
+/// Bound each walk: a deep tree is not worth a slow scan.
 const MAX_NODES: usize = 1500;
 const MAX_TIME: Duration = Duration::from_millis(400);
 
@@ -49,18 +48,15 @@ pub fn windows_where(wanted: impl Fn(&Window) -> bool + Sync) -> Result<Vec<Wind
     let connection = Builder::address(bus.as_str())?.build()?;
 
     let mut frames = Vec::new();
-    for (name, path) in children(&connection, REGISTRY, ROOT).unwrap_or_default() {
-        for (window_name, window_path) in
-            children(&connection, name.as_str(), path.as_str()).unwrap_or_default()
-        {
+    for (name, path) in children(&connection, REGISTRY, ROOT) {
+        for (window_name, window_path) in children(&connection, name.as_str(), path.as_str()) {
             if let Some(frame) = read_frame(&connection, window_name.as_str(), &window_path) {
                 frames.push((window_name, window_path, frame));
             }
         }
     }
 
-    // Each window is a long conversation with its own application, so they are
-    // walked at the same time rather than one after another.
+    // Walk windows in parallel; each talks to its own application.
     Ok(frames
         .into_par_iter()
         .map(|(name, path, window)| {
@@ -77,8 +73,15 @@ pub fn windows_where(wanted: impl Fn(&Window) -> bool + Sync) -> Result<Vec<Wind
 
 fn address() -> Result<String> {
     let session = Connection::session()?;
-    let proxy = Proxy::new(&session, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus")?;
-    Ok(proxy.call("GetAddress", &())?)
+    call(
+        &session,
+        "org.a11y.Bus",
+        "/org/a11y/bus",
+        "org.a11y.Bus",
+        "GetAddress",
+        &(),
+    )
+    .context("the accessibility bus did not answer")
 }
 
 /// A window's title and size, without walking what is inside it.
@@ -111,7 +114,7 @@ fn read_items(connection: &Connection, name: &str, path: &OwnedObjectPath) -> Op
         if let Some(item) = read_item(connection, name, &current) {
             items.push(item);
         }
-        for (_, child) in children(connection, name, current.as_str()).unwrap_or_default() {
+        for (_, child) in children(connection, name, current.as_str()) {
             queue.push(child);
         }
     }
@@ -141,19 +144,41 @@ fn read_item(connection: &Connection, name: &str, path: &OwnedObjectPath) -> Opt
     })
 }
 
-fn children(
+/// One method call, skipping the proxy layer: zbus proxies fetch and watch
+/// every property, which costs two extra round trips per node.
+fn call<R>(
     connection: &Connection,
     name: &str,
     path: &str,
-) -> Result<Vec<(String, OwnedObjectPath)>> {
-    let proxy = proxy(connection, name, path, ACCESSIBLE)?;
-    Ok(proxy.call("GetChildren", &())?)
+    interface: &str,
+    method: &str,
+    body: &(impl serde::Serialize + zbus::zvariant::DynamicType),
+) -> Option<R>
+where
+    R: serde::de::DeserializeOwned + zbus::zvariant::Type,
+{
+    connection
+        .call_method(Some(name), path, Some(interface), method, body)
+        .ok()?
+        .body()
+        .deserialize()
+        .ok()
+}
+
+fn children(connection: &Connection, name: &str, path: &str) -> Vec<(String, OwnedObjectPath)> {
+    call(connection, name, path, ACCESSIBLE, "GetChildren", &()).unwrap_or_default()
 }
 
 fn text(connection: &Connection, name: &str, path: &OwnedObjectPath) -> Option<String> {
-    let proxy = proxy(connection, name, path.as_str(), ACCESSIBLE).ok()?;
-    let name: String = proxy.get_property("Name").ok()?;
-    Some(name.trim().to_owned())
+    let value: OwnedValue = call(
+        connection,
+        name,
+        path.as_str(),
+        "org.freedesktop.DBus.Properties",
+        "Get",
+        &(ACCESSIBLE, "Name"),
+    )?;
+    Some(String::try_from(value).ok()?.trim().to_owned())
 }
 
 fn extents(
@@ -161,22 +186,16 @@ fn extents(
     name: &str,
     path: &OwnedObjectPath,
 ) -> Option<(i32, i32, u32, u32)> {
-    let proxy = proxy(connection, name, path.as_str(), COMPONENT).ok()?;
-    let (x, y, width, height): (i32, i32, i32, i32) =
-        proxy.call("GetExtents", &COORDS_WINDOW).ok()?;
+    let (x, y, width, height): (i32, i32, i32, i32) = call(
+        connection,
+        name,
+        path.as_str(),
+        COMPONENT,
+        "GetExtents",
+        &COORDS_WINDOW,
+    )?;
     if width <= 0 || height <= 0 {
         return None;
     }
     Some((x, y, width as u32, height as u32))
-}
-
-fn proxy<'a>(
-    connection: &'a Connection,
-    name: &str,
-    path: &str,
-    interface: &str,
-) -> Result<Proxy<'a>> {
-    let name = BusName::try_from(name.to_owned())?;
-    let path = ObjectPath::try_from(path.to_owned())?;
-    Ok(Proxy::new(connection, name, path, interface.to_owned())?)
 }

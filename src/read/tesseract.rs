@@ -46,8 +46,7 @@ pub fn read_scaled(capture: &Capture, language: &str, scale: u32) -> Result<Vec<
     Ok(elements)
 }
 
-/// Reads a capture in the given language, for example `deu`, `heb` or
-/// `chi_sim`. Several can be combined with `+`.
+/// Read in a language such as `deu` or `heb+eng`.
 pub fn read(capture: &Capture, language: &str) -> Result<Vec<Element>> {
     // PPM avoids compressing pixels only for Leptonica to decompress them.
     let (width, height) = capture.image.dimensions();
@@ -95,7 +94,6 @@ pub fn read(capture: &Capture, language: &str) -> Result<Vec<Element>> {
     Ok(elements(&String::from_utf8_lossy(&output.stdout), capture))
 }
 
-/// Whether tesseract is installed, and whether it has the language.
 pub fn supports(language: &str) -> Result<()> {
     let available = installed()?;
     for part in language.split('+') {
@@ -106,7 +104,6 @@ pub fn supports(language: &str) -> Result<()> {
     Ok(())
 }
 
-/// Cache installed Tesseract languages for this process.
 pub fn installed() -> Result<Vec<String>> {
     static INSTALLED: OnceLock<Result<Vec<String>, String>> = OnceLock::new();
     INSTALLED
@@ -135,8 +132,7 @@ fn list_langs() -> Result<Vec<String>> {
         .collect())
 }
 
-/// Tesseract reports one row per word, with the line it belongs to. Words are
-/// joined back into lines so the output matches the built-in reader.
+/// Join Tesseract TSV words back into lines.
 fn elements(tsv: &str, capture: &Capture) -> Vec<Element> {
     struct Line {
         id: String,
@@ -179,8 +175,7 @@ fn elements(tsv: &str, capture: &Capture) -> Vec<Element> {
         if right as u32 > capture.image.width() || bottom as u32 > capture.image.height() {
             continue;
         }
-        // The direction marks are invisible and would only ever stop a label
-        // matching what a person types.
+        // Invisible direction marks would break matching.
         let text: String = text
             .chars()
             .filter(|character| !matches!(character, '\u{200E}' | '\u{200F}' | '\u{061C}'))
@@ -241,8 +236,7 @@ fn join(mut words: Vec<(i32, String)>) -> String {
         .sum();
     let total: usize = words.iter().map(|(_, text)| letters(text)).sum();
 
-    // A tie goes to right-to-left: `حفظ PDF` is an Arabic label with a Latin
-    // word in it, not the other way round.
+    // Ties go right-to-left: `حفظ PDF` is an Arabic label.
     if right_to_left * 2 >= total && right_to_left > 0 {
         words.sort_by_key(|(left, _)| std::cmp::Reverse(*left));
     } else {
@@ -262,7 +256,6 @@ fn join(mut words: Vec<(i32, String)>) -> String {
     text
 }
 
-/// Hebrew, Arabic and the other scripts written right to left.
 fn rtl(c: char) -> bool {
     matches!(c as u32, 0x0590..=0x05FF | 0x0600..=0x06FF | 0x0700..=0x074F | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF)
 }

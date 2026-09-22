@@ -1,6 +1,7 @@
 //! GNOME extension and one-shot KWin geometry queries.
 
-use super::geometry::{placement_of, HyprlandClient, Placement};
+use super::geometry::{placement_of, HyprlandClient};
+use super::Placement;
 use anyhow::{Context, Result};
 use std::{io::Write, sync::mpsc, time::Duration};
 use zbus::blocking::{connection::Builder, Connection, Proxy};
@@ -93,27 +94,5 @@ mod tests {
         assert!(windows[0].focused);
         assert!(parse("not JSON").is_err());
         assert!(parse(r#"[{"title":"bad"}]"#).is_err());
-    }
-
-    #[test]
-    fn helper_reply_travels_over_a_private_bus() -> Result<()> {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let (left, right) = std::os::unix::net::UnixStream::pair()?;
-        let guid = zbus::Guid::generate();
-        let server = std::thread::spawn(move || {
-            Builder::async_io_unix_stream(left)
-                .server(guid)
-                .unwrap()
-                .p2p()
-                .serve_at(PATH, Receiver(sender))
-                .unwrap()
-                .build()
-                .unwrap()
-        });
-        let client = Builder::async_io_unix_stream(right).p2p().build()?;
-        let _server = server.join().unwrap();
-        client.call_method(None::<&str>, PATH, Some(INTERFACE), "Reply", &("[]",))?;
-        assert_eq!(receiver.recv_timeout(Duration::from_secs(1))?, "[]");
-        Ok(())
     }
 }

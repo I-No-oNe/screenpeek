@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::capture::{self, Capture, Region};
 use crate::index::{self, Element};
-use crate::read::Engine;
+use crate::read::{Engine, Placement};
 
 mod diff;
 use diff::{dirty_areas, merge_bands, worth_patching};
@@ -25,7 +25,6 @@ use diff::{dirty_areas, merge_bands, worth_patching};
 /// How long a freshly started daemon is given to load its models.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Stop after this much idle time.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// Allow this grace period after the last client session exits.
@@ -38,7 +37,6 @@ fn worker_threads() -> usize {
         .unwrap_or(2)
 }
 
-/// Cache previously recognized bands across frame changes.
 const BAND_CACHE_SIZE: usize = 32;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,11 +44,9 @@ pub struct Request {
     pub token: String,
     pub region: Option<Region>,
     pub monitor: Option<usize>,
-    /// The process that owns the session issuing this request, so the daemon
-    /// can tell when the last one has gone. Zero where it cannot be told.
+    /// Parent process of the client; the daemon exits once all are gone.
     #[serde(default)]
     pub session: u32,
-    /// A language to read with tesseract instead of the built-in model.
     #[serde(default)]
     pub lang: Option<String>,
     #[serde(default)]
@@ -125,7 +121,6 @@ pub fn serve() -> Result<()> {
     Ok(())
 }
 
-/// What the daemon knows about who is still using it.
 struct Activity {
     last_request: Instant,
     sessions: HashSet<u32>,
@@ -146,7 +141,6 @@ impl Activity {
         }
     }
 
-    /// Why the daemon should stop, if it should.
     fn expired(&mut self) -> Option<&'static str> {
         self.sessions.retain(|session| alive(*session));
 
@@ -167,7 +161,6 @@ fn release_endpoint(port: u16) {
     }
 }
 
-/// Stop after idle timeout or when all client sessions have exited.
 fn idle_shutdown(activity: Arc<Mutex<Activity>>, port: u16) {
     std::thread::spawn(move || loop {
         sleep(Duration::from_secs(20));
@@ -204,15 +197,18 @@ struct Session {
     capturer: capture::Backend,
     previous: Option<Frame>,
     bands: HashMap<u64, Vec<Element>>,
-    #[cfg(target_os = "linux")]
-    tree: HashMap<(String, u32, u32), Vec<crate::read::atspi::Item>>,
-    /// Windows whose tree has been shown to account for the text in their
-    /// pixels. Absent means not checked yet, which counts as unverified.
-    #[cfg(target_os = "linux")]
-    covered: HashMap<(String, u32, u32), bool>,
+    tree: TreeCache,
+    /// Whether each window's tree accounts for the text in its pixels.
+    covered: HashMap<WindowKey, bool>,
 }
 
-/// Cache the previous frame and keep OCR results separate from tree labels.
+/// A window as remembered between looks: title and size.
+type WindowKey = (String, u32, u32);
+#[cfg(target_os = "linux")]
+type TreeCache = HashMap<WindowKey, Vec<crate::read::atspi::Item>>;
+#[cfg(not(target_os = "linux"))]
+type TreeCache = HashMap<WindowKey, ()>;
+
 struct Frame {
     key: u64,
     image: RgbaImage,
@@ -224,20 +220,14 @@ struct Frame {
 /// Minimum OCR text coverage required to trust a window’s accessibility tree.
 const COVERAGE_THRESHOLD: f32 = 0.9;
 
-/// A window whose contents are known from its tree and whose position is
-/// known from the compositor.
 struct Located {
     rect: Region,
     elements: Vec<Element>,
-    /// How the window is remembered between looks, and `None` when it cannot
-    /// be identified.
-    key: Option<(String, u32, u32)>,
+    key: Option<WindowKey>,
     /// Skip OCR only after the tree has passed the coverage check.
     verified: bool,
 }
 
-/// Recognized text outside the located windows, plus everything those windows
-/// say about themselves.
 fn merge(pixels: Vec<Element>, located: Vec<Located>) -> Vec<Element> {
     index::merge_tree(
         pixels,
@@ -293,6 +283,8 @@ impl Session {
             how: "portable capture",
             previous: None,
             bands: HashMap::new(),
+            tree: HashMap::new(),
+            covered: HashMap::new(),
         })
     }
 
@@ -331,21 +323,15 @@ impl Session {
             );
             return Ok(elements);
         }
-        #[cfg(target_os = "linux")]
         if !comparable {
             self.tree.clear();
         }
-        // One question to the compositor per look: the same window list gives
-        // the edges recognition splits on and the places the tree hangs on.
-        let placements = window_placements();
-        let edges = edges_of(&placements);
+        let placements = crate::read::placements();
+        let edges = crate::read::edges(&placements);
         let recognition = Instant::now();
 
-        // Full-frame OCR and tree traversal can run independently.
         let overlap = request.lang.is_none() && !comparable;
         let (located, read_ahead) = if overlap {
-            // The tree cache comes out of the session for the duration, so the
-            // walk can hold it while recognition holds the engine.
             let mut tree = std::mem::take(&mut self.tree);
             let (covered, engine) = (&self.covered, &self.engine);
             let (pixels, located) = std::thread::scope(|scope| {
@@ -449,90 +435,85 @@ impl Session {
     }
 }
 
-/// Resolve visible trees using separate caches so traversal can overlap OCR.
 #[cfg(target_os = "linux")]
 fn located_windows(
-    tree: &mut HashMap<(String, u32, u32), Vec<crate::read::atspi::Item>>,
-    covered: &HashMap<(String, u32, u32), bool>,
-    placements: &[crate::read::geometry::Placement],
+    tree: &mut TreeCache,
+    covered: &HashMap<WindowKey, bool>,
+    placements: &[Placement],
     changed: &[Region],
     origin: (i32, i32),
 ) -> Vec<Located> {
-    {
-        if placements.is_empty() {
-            return Vec::new();
-        }
-
-        let touched = |window: &crate::read::atspi::Window| {
-            let Some(placement) = crate::read::fuse::placement_index(window, placements)
-                .map(|index| &placements[index])
-            else {
-                return true;
-            };
-
-            changed.iter().any(|area| {
-                let left = area.x + origin.0;
-                let top = area.y + origin.1;
-                left < placement.x + placement.width as i32
-                    && left + area.width as i32 > placement.x
-                    && top < placement.y + placement.height as i32
-                    && top + area.height as i32 > placement.y
-            })
-        };
-
-        let known = &*tree;
-        let Ok(mut windows) = crate::read::atspi::windows_where(|window| {
-            !known.contains_key(&(window.title.clone(), window.width, window.height))
-                || touched(window)
-        }) else {
-            return Vec::new();
-        };
-
-        for window in &mut windows {
-            let key = (window.title.clone(), window.width, window.height);
-            if window.items.is_empty() {
-                if let Some(remembered) = tree.get(&key) {
-                    window.items = remembered.clone();
-                }
-            } else {
-                tree.insert(key, window.items.clone());
-            }
-        }
-
-        crate::read::fuse::place(&windows, placements)
-            .into_iter()
-            .map(|placed| {
-                let key = placed.key;
-                let verified = key
-                    .as_ref()
-                    .and_then(|key| covered.get(key))
-                    .copied()
-                    .unwrap_or(false);
-                Located {
-                    rect: placed.rect,
-                    elements: placed.elements,
-                    key,
-                    verified,
-                }
-            })
-            .collect()
+    if placements.is_empty() {
+        return Vec::new();
     }
+
+    let touched = |window: &crate::read::atspi::Window| {
+        let Some(placement) =
+            crate::read::fuse::placement_index(window, placements).map(|index| &placements[index])
+        else {
+            return true;
+        };
+
+        changed.iter().any(|area| {
+            let left = area.x + origin.0;
+            let top = area.y + origin.1;
+            left < placement.x + placement.width as i32
+                && left + area.width as i32 > placement.x
+                && top < placement.y + placement.height as i32
+                && top + area.height as i32 > placement.y
+        })
+    };
+
+    let known = &*tree;
+    let Ok(mut windows) = crate::read::atspi::windows_where(|window| {
+        !known.contains_key(&(window.title.clone(), window.width, window.height)) || touched(window)
+    }) else {
+        return Vec::new();
+    };
+
+    for window in &mut windows {
+        let key = (window.title.clone(), window.width, window.height);
+        if window.items.is_empty() {
+            if let Some(remembered) = tree.get(&key) {
+                window.items = remembered.clone();
+            }
+        } else {
+            tree.insert(key, window.items.clone());
+        }
+    }
+
+    crate::read::fuse::place(&windows, placements)
+        .into_iter()
+        .map(|placed| {
+            let key = placed.key;
+            let verified = key
+                .as_ref()
+                .and_then(|key| covered.get(key))
+                .copied()
+                .unwrap_or(false);
+            Located {
+                rect: placed.rect,
+                elements: placed.elements,
+                key,
+                verified,
+            }
+        })
+        .collect()
 }
 
 #[cfg(not(target_os = "linux"))]
 fn located_windows(
-    _tree: &mut HashMap<(String, u32, u32), ()>,
-    _covered: &HashMap<(String, u32, u32), bool>,
-    _placements: &[()],
+    _tree: &mut TreeCache,
+    _covered: &HashMap<WindowKey, bool>,
+    _placements: &[Placement],
     _changed: &[Region],
     _origin: (i32, i32),
 ) -> Vec<Located> {
     Vec::new()
 }
 
-/// Cache whether each tree covers enough of the recognized text.
 fn verify_coverage(
-    covered: &mut HashMap<(String, u32, u32), bool>,
+    covered: &mut HashMap<WindowKey, bool>,
     located: &[Located],
     recognized: &[Element],
 ) {
@@ -544,8 +525,7 @@ fn verify_coverage(
             .iter()
             .filter(|element| window.rect.contains(element.x, element.y))
             .collect();
-        // Nothing recognized means nothing to check against: a blank
-        // window stays unverified rather than being trusted by default.
+        // A blank window proves nothing, so it stays unverified.
         if inside.is_empty() {
             covered.insert(key, false);
             continue;
@@ -582,7 +562,6 @@ impl Session {
 }
 
 impl Session {
-    /// Reads a whole capture with whichever engine the request asked for.
     fn read_all(
         &self,
         capture: &Capture,
@@ -595,8 +574,7 @@ impl Session {
         }
     }
 
-    /// Re-reads the changed bands, in parallel and skipping any band whose
-    /// pixels have been read before.
+    /// Re-read changed bands in parallel, skipping bands already cached.
     fn patch(
         &mut self,
         kept: Vec<Element>,
@@ -658,8 +636,7 @@ impl Session {
     }
 }
 
-/// Band text is cached in band-local coordinates, so the same band matches
-/// wherever it appears on screen.
+/// Band-local coordinates, so a band matches wherever it moves.
 fn offsets_from(elements: &[Element], origin: (i32, i32)) -> Vec<Element> {
     elements
         .iter()
@@ -671,30 +648,7 @@ fn offsets_from(elements: &[Element], origin: (i32, i32)) -> Vec<Element> {
         .collect()
 }
 
-/// Every mapped window, or nothing when the compositor cannot be asked.
-#[cfg(target_os = "linux")]
-fn window_placements() -> Vec<crate::read::geometry::Placement> {
-    crate::read::geometry::windows().unwrap_or_default()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn window_placements() -> Vec<()> {
-    Vec::new()
-}
-
-/// Where those windows end, which is where recognition must stop joining text.
-#[cfg(target_os = "linux")]
-fn edges_of(placements: &[crate::read::geometry::Placement]) -> Vec<i32> {
-    crate::read::geometry::edges_of(placements)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn edges_of(_placements: &[()]) -> Vec<i32> {
-    Vec::new()
-}
-
-/// Band text is remembered by its pixels and the language it was read in:
-/// the same pixels read as German and as Hebrew are two different answers.
+/// Key band text by pixels and language.
 fn band_key(image: &RgbaImage, language: Option<&str>) -> u64 {
     let mut hasher = DefaultHasher::new();
     hash_image(image).hash(&mut hasher);
@@ -717,8 +671,7 @@ fn context_key(monitor: Option<usize>, origin: (i32, i32), excluded: &[Region]) 
     hasher.finish()
 }
 
-/// Asks a running daemon to look, starting one if there is none. `None` means
-/// the daemon could not be reached and the caller should do the work itself.
+/// Ask the daemon, starting it if needed; `None` means read directly.
 pub fn ask(
     region: Option<Region>,
     monitor: Option<usize>,
@@ -760,8 +713,6 @@ pub fn ask(
     }
 }
 
-/// The process that owns this command: the shell or agent that ran it. The
-/// daemon watches it so it can stop when that session is gone.
 #[cfg(unix)]
 fn owning_session() -> u32 {
     std::os::unix::process::parent_id()
@@ -777,8 +728,6 @@ fn connect() -> Option<TcpStream> {
     TcpStream::connect((Ipv4Addr::LOCALHOST, port)).ok()
 }
 
-/// Starts a daemon in the background and waits for it to answer. The first
-/// scan of a session pays for this once; every later one is on the fast path.
 fn start() -> Option<()> {
     let binary = std::env::current_exe().ok()?;
     Command::new(binary)

@@ -30,14 +30,20 @@ impl Remote {
             session: session.try_into()?,
             streams: Vec::new(),
         };
+        // Persist mode 2 keeps the grant until revoked, so the desktop asks once.
+        let token = restore_token();
+        let mut devices = Options::from([
+            ("types", Value::from(3u32)),
+            ("persist_mode", Value::from(2u32)),
+        ]);
+        if let Some(token) = &token {
+            devices.insert("restore_token", Value::from(token.as_str()));
+        }
         portal::request(
             &remote.connection,
             INTERFACE,
             "SelectDevices",
-            &(
-                &remote.session,
-                Options::from([("types", Value::from(3u32))]),
-            ),
+            &(&remote.session, devices),
         )?;
         portal::request(
             &remote.connection,
@@ -51,7 +57,11 @@ impl Remote {
                 ]),
             ),
         )?;
-        eprintln!("Allow screenpeek keyboard/pointer access and select the monitor(s) to control.");
+        if token.is_none() {
+            eprintln!(
+                "Allow screenpeek keyboard/pointer access and select the monitors to control."
+            );
+        }
         let mut started = portal::request(
             &remote.connection,
             INTERFACE,
@@ -65,6 +75,12 @@ impl Remote {
         )?;
         if devices & 3 != 3 {
             bail!("keyboard and pointer access are required");
+        }
+        if let Some(token) = started
+            .remove("restore_token")
+            .and_then(|value| String::try_from(value).ok())
+        {
+            save_restore_token(&token);
         }
         remote.streams = started
             .remove("streams")
@@ -131,6 +147,30 @@ impl Drop for Remote {
             &(),
         );
     }
+}
+
+fn token_path() -> Option<std::path::PathBuf> {
+    Some(dirs::cache_dir()?.join("screenpeek").join("portal-token"))
+}
+
+fn restore_token() -> Option<String> {
+    let token = std::fs::read_to_string(token_path()?).ok()?;
+    Some(token.trim().to_owned()).filter(|token| !token.is_empty())
+}
+
+/// A token is single use; each session hands back the next one.
+fn save_restore_token(token: &str) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let Some(path) = token_path() else { return };
+    let _ = path.parent().map(std::fs::create_dir_all);
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .and_then(|mut file| file.write_all(token.as_bytes()));
 }
 
 fn locate(streams: &[(u32, Values)], x: i32, y: i32) -> Result<(u32, f64, f64)> {

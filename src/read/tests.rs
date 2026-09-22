@@ -124,25 +124,6 @@ fn line_hash_tracks_pixels_and_size_but_not_position() {
 }
 
 #[test]
-#[ignore = "microbenchmark; run cargo test --release line_hash_speed -- --ignored --nocapture"]
-fn line_hash_speed() {
-    let image = image::RgbaImage::from_pixel(1920, 1080, image::Rgba([50, 60, 70, 255]));
-    let line = [RotatedRect::from_rect(Rect::from_tlhw(
-        100., 100., 20., 300.,
-    ))];
-    let mut samples = Vec::new();
-    for _ in 0..7 {
-        let started = Instant::now();
-        for _ in 0..10000 {
-            std::hint::black_box(line_key(std::hint::black_box(&image), &line));
-        }
-        samples.push(started.elapsed().as_secs_f64() * 100.0);
-    }
-    samples.sort_by(f64::total_cmp);
-    println!("300x20 line hash median: {:.2} us", samples[3]);
-}
-
-#[test]
 fn wide_gaps_split_controls_but_keep_words_together() {
     let word = |x, width| RotatedRect::from_rect(Rect::from_tlhw(0., x, 12., width));
     let lines = separate_controls(&[vec![word(0., 30.), word(35., 20.), word(120., 40.)]], &[]);
@@ -196,44 +177,4 @@ fn a_window_edge_splits_controls_a_word_space_apart() {
     );
     // An edge somewhere else leaves the pair alone.
     assert_eq!(separate_controls(&[line], &[200.]).len(), 1);
-}
-
-/// Measure loaded-model latency by image size to compare patched and full reads.
-#[test]
-#[ignore = "loads OCR models; run cargo test --release --bin screenpeek -- --ignored --nocapture"]
-fn read_cost_by_image_size() {
-    let engine = Engine::load().unwrap();
-    let dialog = image::open("bench/fixtures/dialog.png")
-        .unwrap()
-        .into_rgba8();
-
-    let timed = |label: &str, image: image::RgbaImage| {
-        let capture = Capture::from_image(image);
-        engine.clear_cache_for_test();
-        engine.read(&capture).unwrap();
-        let mut runs = Vec::new();
-        for _ in 0..5 {
-            engine.clear_cache_for_test();
-            let started = Instant::now();
-            engine.read(&capture).unwrap();
-            runs.push(started.elapsed().as_secs_f64() * 1000.0);
-        }
-        runs.sort_by(f64::total_cmp);
-        println!(
-            "{label:22} {}x{}  median {:.1} ms",
-            capture.image.width(),
-            capture.image.height(),
-            runs[2]
-        );
-        runs[2]
-    };
-
-    let band = |height: u32| image::imageops::crop_imm(&dialog, 0, 240, 900, height).to_image();
-    let one_band = timed("one 900x40 band", band(40));
-    timed("one 900x120 band", band(120));
-    let whole = timed("whole dialog", dialog.clone());
-    println!(
-        "three bands {:.1} ms against one full read {whole:.1} ms",
-        one_band * 3.0
-    );
 }

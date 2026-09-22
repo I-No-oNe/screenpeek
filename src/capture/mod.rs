@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(target_os = "linux"))]
 use xcap::Monitor;
 
-/// A rectangle on the virtual desktop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Region {
     pub x: i32,
@@ -38,7 +37,6 @@ impl Region {
 impl FromStr for Region {
     type Err = anyhow::Error;
 
-    /// Parses `x,y,width,height`.
     fn from_str(s: &str) -> Result<Self> {
         let parts: Vec<&str> = s.split(',').map(str::trim).collect();
         let [x, y, width, height] = parts.as_slice() else {
@@ -70,7 +68,6 @@ pub struct Capture {
 }
 
 impl Capture {
-    /// Wraps a loaded image, positioned at the origin.
     pub fn from_image(image: RgbaImage) -> Capture {
         Capture {
             image,
@@ -78,26 +75,34 @@ impl Capture {
         }
     }
 
-    /// Mask excluded windows before comparing frames or recognizing text.
+    /// Black out excluded windows before comparing frames or recognizing text.
     pub fn exclude(&mut self, regions: &[Region]) {
+        let (width, height) = self.image.dimensions();
+        let clamp = |value: i64, limit: u32| value.clamp(0, i64::from(limit)) as usize;
         for region in regions {
-            let x = (i64::from(region.x) - i64::from(self.origin.0))
-                .clamp(0, i64::from(self.image.width())) as u32;
-            let y = (i64::from(region.y) - i64::from(self.origin.1))
-                .clamp(0, i64::from(self.image.height())) as u32;
-            let right = (i64::from(region.x) + i64::from(region.width) - i64::from(self.origin.0))
-                .clamp(0, i64::from(self.image.width())) as u32;
-            let bottom = (i64::from(region.y) + i64::from(region.height) - i64::from(self.origin.1))
-                .clamp(0, i64::from(self.image.height())) as u32;
-            for row in y..bottom {
-                for col in x..right {
-                    self.image.put_pixel(col, row, image::Rgba([0, 0, 0, 255]));
+            let left = i64::from(region.x) - i64::from(self.origin.0);
+            let top = i64::from(region.y) - i64::from(self.origin.1);
+            let (x, right) = (
+                clamp(left, width),
+                clamp(left + i64::from(region.width), width),
+            );
+            let (y, bottom) = (
+                clamp(top, height),
+                clamp(top + i64::from(region.height), height),
+            );
+            for row in self
+                .image
+                .chunks_mut(width as usize * 4)
+                .take(bottom)
+                .skip(y)
+            {
+                for pixel in row[x * 4..right * 4].chunks_mut(4) {
+                    pixel.copy_from_slice(&[0, 0, 0, 255]);
                 }
             }
         }
     }
 
-    /// Translates a point inside the captured image to desktop coordinates.
     pub fn to_desktop(&self, x: i32, y: i32) -> (i32, i32) {
         (self.origin.0 + x, self.origin.1 + y)
     }
@@ -113,7 +118,6 @@ pub fn screen(monitor: Option<usize>, region: Option<Region>) -> Result<Capture>
     crop(full, region)
 }
 
-/// Narrows a capture to a region, clamped to what was captured.
 pub(crate) fn crop(capture: Capture, region: Region) -> Result<Capture> {
     let left = i64::from(region.x).max(i64::from(capture.origin.0));
     let top = i64::from(region.y).max(i64::from(capture.origin.1));
