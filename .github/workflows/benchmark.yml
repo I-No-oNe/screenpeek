@@ -1,0 +1,34 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/**
+      - bench/**
+      - Cargo.toml
+  workflow_dispatch:
+
+jobs:
+  recognition:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config imagemagick
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+
+      - name: Recognition accuracy and speed
+        run: |
+          {
+            echo "## Recognition on bench/fixtures/dialog.png"
+            echo
+            bench/accuracy.sh
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if recall drops
+        run: |
+          recall=$(bench/accuracy.sh | awk -F'|' '/\| 1x \|/ { gsub(/[^0-9]/, "", $4); print $4 }')
+          echo "recall at 1x: ${recall}%"
+          [ "${recall:-0}" -ge 90 ] || { echo "recall fell below 90%" >&2; exit 1; }
