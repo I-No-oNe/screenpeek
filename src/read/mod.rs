@@ -31,7 +31,7 @@ use crate::index::{Element, Source};
 pub use language::Language;
 
 /// A visible window as the compositor reports it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Placement {
     pub title: String,
     pub x: i32,
@@ -40,6 +40,8 @@ pub struct Placement {
     pub height: u32,
     pub focused: bool,
     pub pid: Option<u32>,
+    /// The compositor's own name for the window, used to focus it.
+    pub handle: Option<String>,
 }
 
 impl Placement {

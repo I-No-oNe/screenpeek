@@ -195,6 +195,7 @@ mod tests {
             height: 600,
             focused: false,
             pid: None,
+            handle: None,
         }
     }
 

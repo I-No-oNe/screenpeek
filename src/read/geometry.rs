@@ -13,6 +13,7 @@ use super::Placement;
 const I3_MAGIC: &[u8; 6] = b"i3-ipc";
 
 const I3_GET_TREE: u32 = 4;
+const I3_RUN_COMMAND: u32 = 0;
 
 /// Every mapped window, or an error when nothing can be asked.
 pub fn windows() -> Result<Vec<Placement>> {
@@ -26,6 +27,65 @@ pub fn windows() -> Result<Vec<Placement>> {
         return super::geometry_helper::windows();
     }
     x11()
+}
+
+/// Raise and focus a window listed by `windows`.
+pub fn focus(window: &Placement) -> Result<()> {
+    let handle = window
+        .handle
+        .as_deref()
+        .context("the compositor gave this window no handle")?;
+    if let Ok(socket) = hyprland_socket() {
+        // Classic configs take the dispatcher by name; Lua configs by call.
+        let classic = hyprland_ask(&socket, &format!("dispatch focuswindow address:{handle}"))?;
+        if classic.trim() == "ok" {
+            return Ok(());
+        }
+        let lua = format!("dispatch hl.dsp.focus({{ window = \"address:{handle}\" }})");
+        let reply = hyprland_ask(&socket, &lua)?;
+        return match reply.trim() {
+            "ok" => Ok(()),
+            _ => bail!("Hyprland refused to focus the window: {}", classic.trim()),
+        };
+    }
+    if let Some(socket) = env::var_os("SWAYSOCK") {
+        let reply = i3_request(
+            Path::new(&socket),
+            I3_RUN_COMMAND,
+            &format!("[con_id={handle}] focus"),
+        )?;
+        return match reply.contains("\"success\":true") {
+            true => Ok(()),
+            false => bail!("Sway refused to focus the window: {reply}"),
+        };
+    }
+    if env::var_os("WAYLAND_DISPLAY").is_some() {
+        return super::geometry_helper::focus(handle);
+    }
+    x11_focus(handle.parse().context("bad X11 window id")?)
+}
+
+/// Ask the window manager to activate a window, as a taskbar would.
+fn x11_focus(window: u32) -> Result<()> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ClientMessageEvent, ConnectionExt, EventMask};
+
+    let (connection, preferred) = x11rb::connect(None).context("no X display")?;
+    let root = connection.setup().roots[preferred].root;
+    let active = connection
+        .intern_atom(false, b"_NET_ACTIVE_WINDOW")?
+        .reply()?
+        .atom;
+    // Source 2 is a pager, which window managers always obey.
+    let event = ClientMessageEvent::new(32, window, active, [2, 0, 0, 0, 0]);
+    connection.send_event(
+        false,
+        root,
+        EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT,
+        event,
+    )?;
+    connection.flush()?;
+    Ok(())
 }
 
 /// EWMH root properties, set by every X11 window manager.
@@ -114,6 +174,7 @@ fn x11() -> Result<Vec<Placement>> {
             width: geometry.width as u32,
             height: geometry.height as u32,
             focused: window == focused,
+            handle: Some(window.to_string()),
             pid: connection
                 .get_property(false, window, process_id, AtomEnum::CARDINAL, 0, 1)?
                 .reply()?
@@ -201,6 +262,8 @@ pub(super) struct HyprlandClient {
     pid: Option<u32>,
     #[serde(default)]
     workspace: HyprlandWorkspace,
+    #[serde(default)]
+    address: Option<String>,
 }
 
 pub(super) fn placement_of(client: HyprlandClient) -> Option<Placement> {
@@ -215,24 +278,26 @@ pub(super) fn placement_of(client: HyprlandClient) -> Option<Placement> {
         height: client.size[1] as u32,
         focused: client.focus_history_id == 0,
         pid: client.pid,
+        handle: client.address,
     })
 }
 
 fn sway(socket: &Path) -> Result<Vec<Placement>> {
-    let tree: SwayNode = serde_json::from_str(&i3_request(socket, I3_GET_TREE)?)?;
+    let tree: SwayNode = serde_json::from_str(&i3_request(socket, I3_GET_TREE, "")?)?;
     let mut placements = Vec::new();
     collect_sway(&tree, &mut placements);
     Ok(placements)
 }
 
 /// One i3 IPC request/reply.
-fn i3_request(socket: &Path, message: u32) -> Result<String> {
+fn i3_request(socket: &Path, message: u32, payload: &str) -> Result<String> {
     let mut connection = UnixStream::connect(socket).context("cannot reach Sway")?;
 
     let mut request = Vec::with_capacity(14);
     request.extend_from_slice(I3_MAGIC);
-    request.extend_from_slice(&0u32.to_ne_bytes());
+    request.extend_from_slice(&(payload.len() as u32).to_ne_bytes());
     request.extend_from_slice(&message.to_ne_bytes());
+    request.extend_from_slice(payload.as_bytes());
     connection.write_all(&request)?;
 
     let mut header = [0u8; 14];
@@ -250,6 +315,8 @@ fn i3_request(socket: &Path, message: u32) -> Result<String> {
 /// Use Sway’s client-surface rectangle as the AT-SPI origin.
 #[derive(Deserialize)]
 struct SwayNode {
+    #[serde(default)]
+    id: Option<i64>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
@@ -308,6 +375,7 @@ fn sway_placement(node: &SwayNode) -> Option<Placement> {
         height: height as u32,
         focused: node.focused,
         pid: node.pid,
+        handle: node.id.map(|id| id.to_string()),
     })
 }
 

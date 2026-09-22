@@ -12,6 +12,7 @@ const windows = workspace.windowList()
             mapped: true,
             focusHistoryID: window === workspace.activeWindow ? 0 : 1,
             pid: window.pid || null,
+            address: window.internalId.toString(),
         };
     });
 callDBus(SCREENPEEK_CALLBACK, '/org/screenpeek/Windows',

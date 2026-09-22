@@ -1,11 +1,13 @@
 import Gio from 'gi://Gio';
 import Meta from 'gi://Meta';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const SERVICE = 'org.screenpeek.Windows';
 const PATH = '/org/screenpeek/Windows';
 const XML = `<node><interface name="${SERVICE}">
     <method name="List"><arg type="s" direction="out"/></method>
+    <method name="Focus"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
 </interface></node>`;
 
 export default class Screenpeek extends Extension {
@@ -34,8 +36,18 @@ export default class Screenpeek extends Extension {
                     mapped: true,
                     focusHistoryID: window.has_focus() ? 0 : 1,
                     pid: window.get_pid() || null,
+                    address: String(window.get_id()),
                 };
             }));
+    }
+
+    Focus(id) {
+        const window = global.get_window_actors()
+            .map(actor => actor.meta_window)
+            .find(window => String(window.get_id()) === id);
+        if (!window) return false;
+        Main.activateWindow(window);
+        return true;
     }
 
     disable() {

@@ -13,9 +13,25 @@ pub fn windows() -> Result<Vec<Placement>> {
     let connection = Connection::session()?;
     let listed: String = Proxy::new(&connection, INTERFACE, PATH, INTERFACE)?
         .call("List", &())
-        .or_else(|_| kwin())
+        .or_else(|_| kwin(include_str!("../../helpers/kwin/windows.js"), ""))
         .context("GNOME needs helpers/gnome installed; KDE needs KWin scripting enabled")?;
     parse(&listed)
+}
+
+pub fn focus(handle: &str) -> Result<()> {
+    let connection = Connection::session()?;
+    let focused =
+        match Proxy::new(&connection, INTERFACE, PATH, INTERFACE)?.call("Focus", &(handle,)) {
+            Ok(focused) => focused,
+            Err(_) => {
+                let target = format!("const SCREENPEEK_TARGET = {handle:?};\n");
+                kwin(include_str!("../../helpers/kwin/focus.js"), &target).context(
+                    "GNOME needs helpers/gnome installed; KDE needs KWin scripting enabled",
+                )? == "ok"
+            }
+        };
+    anyhow::ensure!(focused, "the window is gone");
+    Ok(())
 }
 
 fn parse(listed: &str) -> Result<Vec<Placement>> {
@@ -33,7 +49,8 @@ impl Receiver {
     }
 }
 
-fn kwin() -> Result<String, zbus::Error> {
+/// Run a one-shot KWin script that answers through `callDBus`.
+fn kwin(source: &str, preamble: &str) -> Result<String, zbus::Error> {
     let (sender, receiver) = mpsc::sync_channel(1);
     let connection = Builder::session()?
         .serve_at(PATH, Receiver(sender))?
@@ -48,16 +65,13 @@ fn kwin() -> Result<String, zbus::Error> {
     let name = script.path().to_string_lossy().into_owned();
     writeln!(
         script,
-        "const SCREENPEEK_CALLBACK = {:?};\n{}",
+        "const SCREENPEEK_CALLBACK = {:?};\n{preamble}{source}",
         connection.unique_name().unwrap().as_str(),
-        include_str!("../../helpers/kwin/windows.js")
     )?;
     script.flush()?;
     let id: i32 = scripting.call("loadScript", &(&name, &name))?;
     if id < 0 {
-        return Err(zbus::Error::Failure(
-            "KWin refused the geometry script".into(),
-        ));
+        return Err(zbus::Error::Failure("KWin refused the script".into()));
     }
     let result = (|| {
         let path = format!("/Scripting/Script{id}");
@@ -70,7 +84,7 @@ fn kwin() -> Result<String, zbus::Error> {
         .call::<_, _, ()>("run", &())?;
         receiver
             .recv_timeout(Duration::from_secs(3))
-            .map_err(|_| zbus::Error::Failure("KWin geometry query timed out".into()))
+            .map_err(|_| zbus::Error::Failure("KWin script timed out".into()))
     })();
     let _ = scripting.call::<_, _, bool>("unloadScript", &(&name,));
     result

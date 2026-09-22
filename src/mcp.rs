@@ -40,6 +40,16 @@ const TOOLS: &[Tool] = &[
         ],
     },
     Tool {
+        name: "windows",
+        description: "List visible windows with position, size and which one has focus.",
+        params: &[],
+    },
+    Tool {
+        name: "focus",
+        description: "Bring a window to the front by (part of) its title.",
+        params: &[("title", Kind::Text, "Window title or part of it")],
+    },
+    Tool {
         name: "click",
         description: "Click an element by its text or scan ID.",
         params: &[

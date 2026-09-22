@@ -115,6 +115,15 @@ enum Command {
         area: Area,
     },
 
+    /// List the visible windows, as `title @x,y WIDTHxHEIGHT`
+    Windows {
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Bring a window to the front by (part of) its title
+    Focus { title: String },
+
     /// Type text into whatever has focus
     Type {
         /// Leading dashes are part of the text, not flags
@@ -310,6 +319,31 @@ fn main() -> Result<()> {
             println!("{start}\n{end}");
         }
 
+        Command::Windows { json } => {
+            let windows = read::placements();
+            if json {
+                let listed: Vec<_> = windows
+                    .iter()
+                    .map(|w| {
+                        serde_json::json!({"title": w.title, "x": w.x, "y": w.y,
+                        "width": w.width, "height": w.height, "focused": w.focused})
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&listed)?);
+            } else {
+                windows
+                    .iter()
+                    .for_each(|window| println!("{}", describe(window)));
+            }
+        }
+
+        Command::Focus { title } => {
+            let windows = read::placements();
+            let window = pick_window(&windows, &title)?;
+            focus_window(window)?;
+            println!("{}", describe(window));
+        }
+
         Command::Type { text } => Pointer::new()?.type_text(&text)?,
 
         Command::Key { combination } => Pointer::new()?.press(&combination)?,
@@ -447,6 +481,56 @@ fn run(steps: &[String], area: &Area) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn describe(window: &read::Placement) -> String {
+    let focused = if window.focused { " [focused]" } else { "" };
+    format!(
+        "{} @{},{} {}x{}{focused}",
+        window.title, window.x, window.y, window.width, window.height
+    )
+}
+
+/// The one window whose title matches: exactly, else containing the text.
+fn pick_window<'a>(windows: &'a [read::Placement], title: &str) -> Result<&'a read::Placement> {
+    if windows.is_empty() {
+        anyhow::bail!("this desktop does not report its windows");
+    }
+    let wanted = title.to_lowercase();
+    let exact: Vec<_> = windows
+        .iter()
+        .filter(|w| w.title.to_lowercase() == wanted)
+        .collect();
+    let hits = if exact.is_empty() {
+        windows
+            .iter()
+            .filter(|w| w.title.to_lowercase().contains(&wanted))
+            .collect()
+    } else {
+        exact
+    };
+    match hits.as_slice() {
+        [] => anyhow::bail!("no window title contains {title:?}; see `screenpeek windows`"),
+        [window] => Ok(window),
+        many => anyhow::bail!(
+            "{} windows match {title:?}, be more specific:\n{}",
+            many.len(),
+            many.iter()
+                .map(|w| describe(w))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn focus_window(window: &read::Placement) -> Result<()> {
+    read::geometry::focus(window)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn focus_window(_window: &read::Placement) -> Result<()> {
+    anyhow::bail!("focusing windows is not supported on this platform yet")
 }
 
 /// How long a `wait` step in `run` waits.
