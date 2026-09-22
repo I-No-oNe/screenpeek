@@ -91,6 +91,10 @@ enum Command {
         #[arg(long, default_value_t = 1, value_name = "N")]
         scale: u32,
 
+        /// Read this language with tesseract instead of the built-in model
+        #[arg(long, value_name = "CODE")]
+        lang: Option<String>,
+
         #[arg(long)]
         json: bool,
     },
@@ -123,6 +127,12 @@ struct Area {
     /// Read only the window that has focus
     #[arg(long, conflicts_with_all = ["region", "monitor"])]
     focused: bool,
+
+    /// Read this language instead of English, for example deu, heb, chi_sim,
+    /// or `auto` to work it out from the screen and the session's locale.
+    /// Needs tesseract and that language's data installed
+    #[arg(long, value_name = "CODE")]
+    lang: Option<String>,
 }
 
 impl Area {
@@ -206,12 +216,20 @@ fn main() -> Result<()> {
 
         Command::Status => println!("{}", daemon::endpoint_summary()?),
 
-        Command::Read { path, scale, json } => {
+        Command::Read {
+            path,
+            scale,
+            lang,
+            json,
+        } => {
             let image = image::open(&path)
                 .with_context(|| format!("cannot open {}", path.display()))?
                 .into_rgba8();
             let capture = capture::Capture::from_image(image);
-            let elements = read::Engine::load()?.read_scaled(&capture, scale)?;
+            let elements = match resolve_language(lang.as_deref())? {
+                Some(language) => read::tesseract::read(&capture, &language)?,
+                None => read::Engine::load()?.read_scaled(&capture, scale)?,
+            };
             print(&elements.iter().collect::<Vec<_>>(), json)?;
         }
 
@@ -283,13 +301,17 @@ fn run(steps: &[String], area: &Area) -> Result<()> {
 
 fn scan(area: &Area) -> Result<Vec<Element>> {
     let region = area.region()?;
+    let language = resolve_language(area.lang.as_deref())?;
     let elements = match controls(area) {
         Some(elements) => elements,
-        None => match daemon::ask(region, area.monitor) {
+        None => match daemon::ask(region, area.monitor, language.clone()) {
             Some(elements) => elements,
             None => {
                 let capture = capture::screen(area.monitor, region)?;
-                let recognized = read::Engine::load()?.read(&capture)?;
+                let recognized = match &language {
+                    Some(language) => read::tesseract::read(&capture, language)?,
+                    None => read::Engine::load()?.read(&capture)?,
+                };
                 with_tree_text(recognized)
             }
         },
@@ -310,6 +332,55 @@ fn resolve(target: &str, fresh: bool, area: &Area) -> Result<Snapshot> {
         }
     }
     Ok(Snapshot::new(scan(area)?))
+}
+
+/// Turns `--lang` into the languages to read with, checking that tesseract has
+/// them. `auto` looks at the text the accessibility tree already gives and at
+/// the session's locale, and comes back empty when English is all that is
+/// needed, since the built-in model reads that faster.
+fn resolve_language(requested: Option<&str>) -> Result<Option<String>> {
+    let Some(requested) = requested else {
+        return Ok(None);
+    };
+
+    if requested != "auto" {
+        read::tesseract::supports(requested)?;
+        return Ok(Some(requested.to_owned()));
+    }
+
+    let installed = read::tesseract::installed()?;
+    Ok(read::language::detect(&known_text(), &installed))
+}
+
+/// Text the platform hands over without recognition, which is what the
+/// language guess is made from.
+#[cfg(target_os = "linux")]
+fn known_text() -> Vec<Element> {
+    let Ok(windows) = read::atspi::windows() else {
+        return Vec::new();
+    };
+    windows
+        .iter()
+        .flat_map(|window| window.items.iter())
+        .map(|item| Element {
+            id: 0,
+            text: item.text.clone(),
+            x: item.x,
+            y: item.y,
+            width: item.width,
+            height: item.height,
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn known_text() -> Vec<Element> {
+    read::ui::elements().unwrap_or_default()
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn known_text() -> Vec<Element> {
+    Vec::new()
 }
 
 /// Replaces what was recognized with what the accessibility tree says, using
