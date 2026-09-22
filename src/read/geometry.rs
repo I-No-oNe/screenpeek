@@ -1,9 +1,10 @@
-//! Where each window actually is, asked of the compositor.
+//! Where each window actually is, asked of the compositor or the X server.
 //!
 //! The accessibility tree knows what a window contains but not where it sits.
 //! wlroots compositors keep that in their own IPC: Hyprland answers a line of
-//! JSON, Sway speaks the i3 protocol. Either way nothing has to be worked out
-//! from pixels.
+//! JSON, Sway speaks the i3 protocol. X11 publishes the same thing as window
+//! properties on the root. Either way nothing has to be worked out from
+//! pixels.
 
 use std::env;
 use std::io::{Read, Write};
@@ -29,7 +30,7 @@ pub struct Placement {
     pub focused: bool,
 }
 
-/// Every mapped window, or an error when no compositor answers.
+/// Every mapped window, or an error when nothing can be asked.
 pub fn windows() -> Result<Vec<Placement>> {
     if let Ok(socket) = hyprland_socket() {
         return hyprland(&socket);
@@ -37,7 +38,98 @@ pub fn windows() -> Result<Vec<Placement>> {
     if let Some(socket) = env::var_os("SWAYSOCK") {
         return sway(Path::new(&socket));
     }
-    bail!("no compositor to ask; Hyprland and Sway are supported")
+    if env::var_os("DISPLAY").is_some() {
+        return x11();
+    }
+    bail!("nothing to ask for window positions; Hyprland, Sway and X11 are supported")
+}
+
+/// On X11 every window manager publishes the same properties on the root, so
+/// this works whatever is running.
+fn x11() -> Result<Vec<Placement>> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, MapState};
+
+    let (connection, preferred) = x11rb::connect(None).context("no X display")?;
+    let root = connection
+        .setup()
+        .roots
+        .get(preferred)
+        .ok_or_else(|| anyhow!("no screen {preferred}"))?
+        .root;
+
+    let atom = |name: &str| -> Result<u32> {
+        Ok(connection
+            .intern_atom(false, name.as_bytes())?
+            .reply()?
+            .atom)
+    };
+    let client_list = atom("_NET_CLIENT_LIST")?;
+    let active_window = atom("_NET_ACTIVE_WINDOW")?;
+    let net_name = atom("_NET_WM_NAME")?;
+    let utf8 = atom("UTF8_STRING")?;
+
+    let listed = connection
+        .get_property(false, root, client_list, AtomEnum::WINDOW, 0, u32::MAX)?
+        .reply()?;
+    let windows: Vec<u32> = listed.value32().map(Iterator::collect).unwrap_or_default();
+
+    let focused = connection
+        .get_property(false, root, active_window, AtomEnum::WINDOW, 0, 1)?
+        .reply()?
+        .value32()
+        .and_then(|mut values| values.next())
+        .unwrap_or(0);
+
+    let mut placements = Vec::new();
+    for window in windows {
+        let attributes = connection.get_window_attributes(window)?.reply()?;
+        if attributes.map_state != MapState::VIEWABLE {
+            continue;
+        }
+
+        let geometry = connection.get_geometry(window)?.reply()?;
+        let position = connection
+            .translate_coordinates(window, root, 0, 0)?
+            .reply()?;
+
+        let title = text_property(&connection, window, net_name, utf8)?
+            .or(text_property(
+                &connection,
+                window,
+                AtomEnum::WM_NAME.into(),
+                AtomEnum::STRING.into(),
+            )?)
+            .unwrap_or_default();
+
+        placements.push(Placement {
+            title,
+            x: position.dst_x as i32,
+            y: position.dst_y as i32,
+            width: geometry.width as u32,
+            height: geometry.height as u32,
+            focused: window == focused,
+        });
+    }
+
+    Ok(placements)
+}
+
+fn text_property(
+    connection: &impl x11rb::connection::Connection,
+    window: u32,
+    property: u32,
+    kind: u32,
+) -> Result<Option<String>> {
+    use x11rb::protocol::xproto::ConnectionExt;
+
+    let reply = connection
+        .get_property(false, window, property, kind, 0, u32::MAX)?
+        .reply()?;
+    if reply.value.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&reply.value).into_owned()))
 }
 
 /// The window the keyboard is on.
