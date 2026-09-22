@@ -269,7 +269,8 @@ impl Pointer {
         Ok(())
     }
 
-    /// Recreate the virtual keyboard per character to apply Enigo's keymap.
+    /// A reused virtual keyboard drops characters that need Shift or a keymap
+    /// change, so those get a fresh keyboard each; plain keys reuse one.
     pub fn type_text(&mut self, text: &str) -> Result<()> {
         #[cfg(target_os = "linux")]
         if self.portal.is_some() {
@@ -279,13 +280,16 @@ impl Pointer {
             return Ok(());
         }
         for character in text.chars() {
-            self.enigo = Some(new_enigo()?);
-            sleep(KEYMAP_DELAY);
-            self.enigo
-                .as_mut()
-                .context("input backend unavailable")?
+            if self.enigo.is_none() || !plain(character) {
+                self.enigo = Some(new_enigo()?);
+                sleep(KEYMAP_DELAY);
+            }
+            self.enigo()?
                 .text(character.encode_utf8(&mut [0; 4]))
                 .context("cannot type text")?;
+            if !plain(character) {
+                self.enigo = None;
+            }
         }
         Ok(())
     }
@@ -293,6 +297,13 @@ impl Pointer {
     pub fn wait_for_focus(&self) {
         sleep(FOCUS_DELAY);
     }
+}
+
+/// Characters on an unshifted US key, which a reused keyboard types reliably.
+fn plain(character: char) -> bool {
+    character.is_ascii_lowercase()
+        || character.is_ascii_digit()
+        || " ,.-=;'/[]`\\".contains(character)
 }
 
 #[cfg(test)]
