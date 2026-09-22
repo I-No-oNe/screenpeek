@@ -25,6 +25,12 @@ use diff::{dirty_areas, merge_bands, worth_patching};
 /// How long a freshly started daemon is given to load its models.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How long a connected client may take to send its request.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a client waits for an answer before reading the screen itself.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
+
 const IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// Allow this grace period after the last client session exits.
@@ -98,6 +104,8 @@ pub fn serve() -> Result<()> {
             }
         };
 
+        // A client that connects and says nothing must not stall the others.
+        let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
         let response = match read_request(&mut stream) {
             Ok(request) if request.token != token => Response::Error("bad token".into()),
             Ok(request) => {
@@ -699,6 +707,7 @@ pub fn ask(
     };
     let mut line = serde_json::to_vec(&request).ok()?;
     line.push(b'\n');
+    stream.set_read_timeout(Some(ANSWER_TIMEOUT)).ok()?;
     stream.write_all(&line).ok()?;
 
     let mut reply = String::new();
@@ -775,9 +784,11 @@ fn write_endpoint(port: u16, token: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&path, format!("{port} {token}"))
-        .with_context(|| format!("cannot write {}", path.display()))?;
-    owner_only(&path)
+    let partial = path.with_extension("partial");
+    fs::write(&partial, format!("{port} {token}"))
+        .with_context(|| format!("cannot write {}", partial.display()))?;
+    owner_only(&partial)?;
+    fs::rename(&partial, &path).with_context(|| format!("cannot write {}", path.display()))
 }
 
 #[cfg(unix)]

@@ -120,7 +120,10 @@ impl Snapshot {
                 .with_context(|| format!("cannot create {}", parent.display()))?;
         }
         let json = serde_json::to_vec(self)?;
-        fs::write(&path, json).with_context(|| format!("cannot write {}", path.display()))
+        // Write then rename, so a concurrent reader never sees half a file.
+        let partial = path.with_extension(format!("{}.partial", std::process::id()));
+        fs::write(&partial, json).with_context(|| format!("cannot write {}", partial.display()))?;
+        fs::rename(&partial, &path).with_context(|| format!("cannot write {}", path.display()))
     }
 
     /// Resolve an ID or text: exact, prefix, substring, then folded matching.
