@@ -20,13 +20,15 @@ const COORDS_WINDOW: u32 = 1;
 const MAX_NODES: usize = 1500;
 const MAX_TIME: Duration = Duration::from_millis(400);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Item {
     pub text: String,
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    pub role: Option<&'static str>,
+    pub states: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,26 +49,23 @@ pub fn windows_where(wanted: impl Fn(&Window) -> bool + Sync) -> Result<Vec<Wind
     let bus = address().context("no accessibility bus")?;
     let connection = Builder::address(bus.as_str())?.build()?;
 
-    let mut frames = Vec::new();
-    for (name, path) in children(&connection, REGISTRY, ROOT) {
-        for (window_name, window_path) in children(&connection, name.as_str(), path.as_str()) {
-            if let Some(frame) = read_frame(&connection, window_name.as_str(), &window_path) {
-                frames.push((window_name, window_path, frame));
-            }
-        }
-    }
+    let frames: Vec<_> = children(&connection, REGISTRY, ROOT)
+        .into_par_iter()
+        .flat_map_iter(|(name, path)| children(&connection, name.as_str(), path.as_str()))
+        .filter_map(|(name, path)| {
+            let frame = read_frame(&connection, name.as_str(), &path)?;
+            Some((name, path, frame))
+        })
+        .collect();
 
-    // Walk windows in parallel; each talks to its own application.
     Ok(frames
         .into_par_iter()
         .map(|(name, path, window)| {
             if !wanted(&window) {
                 return window;
             }
-            match read_items(&connection, name.as_str(), &path) {
-                Some(items) => Window { items, ..window },
-                None => window,
-            }
+            let items = read_items(&connection, name.as_str(), &path);
+            Window { items, ..window }
         })
         .collect())
 }
@@ -99,48 +98,120 @@ fn read_frame(connection: &Connection, name: &str, path: &OwnedObjectPath) -> Op
     })
 }
 
-fn read_items(connection: &Connection, name: &str, path: &OwnedObjectPath) -> Option<Vec<Item>> {
-    let mut items = Vec::new();
-    let mut queue = vec![path.clone()];
+/// Walk a window level by level, reading each level in parallel. Subtrees
+/// that are not showing (inactive tabs, collapsed menus) are skipped.
+fn read_items(connection: &Connection, name: &str, root: &OwnedObjectPath) -> Vec<Item> {
     let started = Instant::now();
+    let mut items = Vec::new();
+    let mut level = vec![root.clone()];
     let mut seen = 0;
 
-    while let Some(current) = queue.pop() {
-        seen += 1;
-        if seen > MAX_NODES || started.elapsed() > MAX_TIME {
-            break;
-        }
-
-        if let Some(item) = read_item(connection, name, &current) {
-            items.push(item);
-        }
-        for (_, child) in children(connection, name, current.as_str()) {
-            queue.push(child);
+    while !level.is_empty() && seen < MAX_NODES && started.elapsed() < MAX_TIME {
+        level.truncate(MAX_NODES - seen);
+        seen += level.len();
+        let visited: Vec<_> = level
+            .par_iter()
+            .map(|path| visit(connection, name, path))
+            .collect();
+        level = Vec::new();
+        for (item, children) in visited {
+            items.extend(item);
+            level.extend(children);
         }
     }
 
-    items.sort_by_key(|item| (item.y, item.x, item.text.clone()));
+    items.sort_by(|a, b| (a.y, a.x, &a.text).cmp(&(b.y, b.x, &b.text)));
     items.dedup_by(|a, b| a.text == b.text && a.x == b.x && a.y == b.y);
-    Some(items)
+    items
 }
 
-fn read_item(connection: &Connection, name: &str, path: &OwnedObjectPath) -> Option<Item> {
-    let text = text(connection, name, path)?;
-    if text.is_empty() {
-        return None;
+/// One node: its item when it is named and showing, and its children.
+fn visit(
+    connection: &Connection,
+    name: &str,
+    path: &OwnedObjectPath,
+) -> (Option<Item>, Vec<OwnedObjectPath>) {
+    let states = call::<Vec<u32>>(connection, name, path.as_str(), ACCESSIBLE, "GetState", &())
+        .map(|words| states_of(&words));
+    if states.as_ref().is_some_and(|states| !states.showing) {
+        return (None, Vec::new());
     }
-
-    let (x, y, width, height) = extents(connection, name, path)?;
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    Some(Item {
+    let (text, children) = rayon::join(
+        || text(connection, name, path),
+        || children(connection, name, path.as_str()),
+    );
+    let Some(text) = text.filter(|text| !text.is_empty()) else {
+        return (None, children.into_iter().map(|(_, child)| child).collect());
+    };
+    let (extents, role) = rayon::join(
+        || extents(connection, name, path),
+        || call::<u32>(connection, name, path.as_str(), ACCESSIBLE, "GetRole", &()),
+    );
+    let item = extents.map(|(x, y, width, height)| Item {
         text,
         x,
         y,
         width,
         height,
+        role: role.and_then(role_name),
+        states: states.map(|states| states.notable).unwrap_or_default(),
+    });
+    (item, children.into_iter().map(|(_, child)| child).collect())
+}
+
+struct States {
+    showing: bool,
+    notable: Vec<&'static str>,
+}
+
+/// AT-SPI state bits (AtspiStateType) that matter to someone clicking.
+fn states_of(words: &[u32]) -> States {
+    let has = |bit: u32| words.first().is_some_and(|word| word & (1 << bit) != 0);
+    let mut notable = Vec::new();
+    for (bit, name) in [
+        (4, "checked"),
+        (12, "focused"),
+        (23, "selected"),
+        (10, "expanded"),
+    ] {
+        if has(bit) {
+            notable.push(name);
+        }
+    }
+    if !has(24) {
+        notable.push("disabled");
+    }
+    States {
+        showing: has(25),
+        notable,
+    }
+}
+
+/// Short names for the AT-SPI roles (AtspiRole) worth telling apart.
+fn role_name(role: u32) -> Option<&'static str> {
+    Some(match role {
+        7 | 8 => "checkbox",
+        11 => "combobox",
+        16 => "dialog",
+        26 | 27 => "image",
+        29 => "label",
+        32 => "listitem",
+        33 => "menu",
+        35 => "menuitem",
+        37 => "tab",
+        40 => "password",
+        43 => "button",
+        44 | 45 => "radio",
+        51 => "slider",
+        52 => "spinbutton",
+        56 => "cell",
+        61 | 79 => "entry",
+        62 => "toggle",
+        83 => "heading",
+        88 => "link",
+        91 => "treeitem",
+        130 => "switch",
+        _ => return None,
     })
 }
 
@@ -198,4 +269,22 @@ fn extents(
         return None;
     }
     Some((x, y, width as u32, height as u32))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_bits_become_words() {
+        let showing_checked = (1 << 25) | (1 << 24) | (1 << 4);
+        let states = states_of(&[showing_checked, 0]);
+        assert!(states.showing);
+        assert_eq!(states.notable, ["checked"]);
+        let hidden_disabled = states_of(&[0, 0]);
+        assert!(!hidden_disabled.showing);
+        assert_eq!(hidden_disabled.notable, ["disabled"]);
+        assert_eq!(role_name(43), Some("button"));
+        assert_eq!(role_name(20), None);
+    }
 }

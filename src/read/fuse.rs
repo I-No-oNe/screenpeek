@@ -73,7 +73,8 @@ pub fn place(windows: &[Window], placements: &[Placement]) -> Vec<Placed> {
                     width: item.width,
                     height: item.height,
                     source: Source::Tree,
-                    ..Default::default()
+                    role: item.role.map(String::from),
+                    states: item.states.iter().map(|state| state.to_string()).collect(),
                 })
                 .collect(),
         });
@@ -99,7 +100,8 @@ pub fn fuse(recognized: Vec<Element>, windows: &[Window]) -> Vec<Element> {
                 width: item.width,
                 height: item.height,
                 source: Source::Tree,
-                ..Default::default()
+                role: item.role.map(String::from),
+                states: item.states.iter().map(|state| state.to_string()).collect(),
             });
         }
     }
@@ -180,6 +182,7 @@ mod tests {
             y,
             width: 40,
             height: 12,
+            ..Default::default()
         }
     }
 

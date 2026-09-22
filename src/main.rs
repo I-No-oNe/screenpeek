@@ -322,7 +322,11 @@ fn main() -> Result<()> {
             for window in &windows {
                 println!("{} ({}x{})", window.title, window.width, window.height);
                 for item in &window.items {
-                    println!("  {} @{},{}", item.text, item.x, item.y);
+                    let role = item.role.unwrap_or("-");
+                    println!(
+                        "  {role} {} @{},{} {:?}",
+                        item.text, item.x, item.y, item.states
+                    );
                 }
             }
             eprintln!("{} window(s) in {}ms", windows.len(), elapsed.as_millis());
@@ -604,7 +608,8 @@ fn known_text() -> Vec<Element> {
             width: item.width,
             height: item.height,
             source: index::Source::Tree,
-            ..Default::default()
+            role: item.role.map(String::from),
+            states: item.states.iter().map(|state| state.to_string()).collect(),
         })
         .collect()
 }
