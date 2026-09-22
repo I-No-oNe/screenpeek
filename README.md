@@ -48,14 +48,23 @@ sh install.sh                     # latest release into ~/.local/bin
 OCR models download on first use. For other languages, see
 [languages](docs/languages.md).
 
-## Agents (Codex, Claude Code)
+## Replace computer use in your agent
 
 ```sh
-sh scripts/install-skills.sh codex    # or: claude
+sh scripts/install-skills.sh          # Codex and/or Claude Code, whichever is installed
+sh scripts/install-skills.sh --link   # symlink, so `git pull` updates the skill
 ```
 
-Then ask `$screenpeek` to read the desktop or `$screenpeek-drive` to operate an
-app. The agent must run inside the logged-in desktop session.
+The `screenpeek` skill tells the agent to reach for screenpeek before taking a
+screenshot: scan for the label, click or fill it by name, then verify with
+another scan. Screenshots stay the fallback for visual questions. Start a new
+agent session afterwards; it must run inside the logged-in desktop session.
+
+To make it explicit, add to your `AGENTS.md` or `CLAUDE.md`:
+
+> For desktop apps, use `screenpeek` (scan, click, fill, key, run) instead of
+> screenshots or computer use. Only take a screenshot when the answer depends
+> on how something looks.
 
 ## Platforms
 

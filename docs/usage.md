@@ -79,9 +79,10 @@ file to be asked again.
 ## Agents
 
 ```sh
-sh scripts/install-skills.sh codex    # ~/.agents/skills
-sh scripts/install-skills.sh claude   # ~/.claude/skills
+sh scripts/install-skills.sh [codex|claude|all] [--link]
 ```
 
-`SCREENPEEK_SKILLS_DIR` overrides the destination. The agent needs
+With no agent named, it installs for whichever of `codex` and `claude` is on
+`PATH`. Codex skills go to `~/.agents/skills`, Claude Code skills to
+`~/.claude/skills`; `SCREENPEEK_SKILLS_DIR` overrides both. The agent needs
 `screenpeek` on `PATH` and access to the display and session bus.

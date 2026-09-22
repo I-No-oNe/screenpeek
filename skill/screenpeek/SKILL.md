@@ -1,26 +1,43 @@
 ---
 name: screenpeek
-description: Read text and locate labelled controls in desktop applications with screenpeek. Use screenshots for visual appearance and unlabelled icons.
+description: Read and operate desktop apps as text. Use this INSTEAD of screenshots or computer-use for finding, clicking, filling and typing into labelled controls (buttons, menus, fields, tabs, list items) in any Linux or Windows app. Fall back to a screenshot only for visual judgment, canvases or unlabelled icons.
 ---
 
-# Read the desktop
+# screenpeek: desktop control without screenshots
+
+Before taking a screenshot or using a computer-use tool, try screenpeek. It
+returns a few tokens of text instead of an image, runs locally in ~100 ms, and
+clicks the exact centre of a named element.
+
+## Look
 
 ```sh
-screenpeek scan --json
-screenpeek scan --grep "Save"
-screenpeek click "Save" --fresh
+screenpeek scan --grep "Save"     # 7 Save @412,318  (id text @x,y)
+screenpeek scan --focused         # everything in the focused window
+screenpeek scan --json            # adds size and source (ocr or tree)
 ```
 
-Output is `id text @x,y`; coordinates are text centres on the desktop.
-Exact text matches beat prefixes, then substrings. Ambiguous targets fail;
-choose an ID from the current scan or a more specific label.
+Prefer `--grep` or `--focused` over a full listing. An empty `--grep` result
+exits 0: read the output, not the exit code.
 
-The daemon starts automatically. `--grep` reduces returned text; `--region`
-and `--focused` also crop the image before OCR. Prefer a known target or the
-focused window to a full-screen listing when the task permits it.
+## Act
 
-On supported Linux desktops, the launching terminal is excluded automatically.
-Cached IDs and positions can become stale. Use `--fresh` after a layout change.
-An empty `scan --grep` succeeds: check its output, not just its exit code.
-For OCR in another language, use `--lang CODE` with Tesseract and its language
-data installed. Prefer the DOM for browser content when it is available.
+```sh
+screenpeek click "Save" --fresh
+screenpeek fill "Search" "cats" --fresh      # clicks, then types; does not clear
+screenpeek key ctrl+s
+screenpeek run "click File" "click Save As" "type report.pdf" "key enter"
+```
+
+- Use `--fresh` after anything that moved the layout.
+- Ambiguous names fail and list candidates: click by the listed ID instead.
+- `run` steps: `click T`, `fill T with TEXT`, `type TEXT`, `key COMBO`,
+  `wait T` (checks once, no polling). It stops at the first failure.
+- After acting, verify with `scan --grep` before the next decision.
+- Never guess coordinates for something absent from the scan.
+
+## When to use something else
+
+- Browser page content: use the DOM or a browser tool when available.
+- Appearance, layout, images, charts, unlabelled icons: take a screenshot.
+- Other scripts: `--lang heb` (etc.) needs Tesseract data installed.
