@@ -63,6 +63,15 @@ jobs:
           ./scripts/fetch-models.ps1 heb
           if (-not (Test-Path "$env:APPDATA\tessdata\heb.traineddata")) { throw 'heb was not fetched' }
           cargo run --locked -- doctor
+      - name: Scoop installs from this repository's bucket
+        shell: pwsh
+        run: |
+          Invoke-RestMethod https://get.scoop.sh -OutFile scoop-install.ps1
+          ./scoop-install.ps1 -RunAsAdmin
+          $env:Path = "$HOME\scoop\shims;$env:Path"
+          scoop bucket add screenpeek https://github.com/${{ github.repository }}
+          scoop install screenpeek/screenpeek
+          screenpeek --version
 
   gnome:
     runs-on: ubuntu-24.04
