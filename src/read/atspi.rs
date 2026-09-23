@@ -72,6 +72,18 @@ pub fn windows_where(wanted: impl Fn(&Window) -> bool + Sync) -> Result<Vec<Wind
 
 fn address() -> Result<String> {
     let session = Connection::session()?;
+    // Qt apps (all of KDE) publish their tree only once this is on.
+    let _ = session.call_method(
+        Some("org.a11y.Bus"),
+        "/org/a11y/bus",
+        Some("org.freedesktop.DBus.Properties"),
+        "Set",
+        &(
+            "org.a11y.Status",
+            "IsEnabled",
+            zbus::zvariant::Value::from(true),
+        ),
+    );
     call(
         &session,
         "org.a11y.Bus",

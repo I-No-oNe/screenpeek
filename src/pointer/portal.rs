@@ -19,7 +19,13 @@ pub struct Remote {
 impl Remote {
     pub fn new() -> Result<Self> {
         let connection = Connection::session()?;
-        let created = portal::request(&connection, INTERFACE, "CreateSession", &(Options::new(),))?;
+        // xdg-desktop-portal 1.22 aborts on a CreateSession without a session token.
+        let token = format!("screenpeek{}", std::process::id());
+        let options = Options::from([
+            ("handle_token", Value::from(token.as_str())),
+            ("session_handle_token", Value::from(token.as_str())),
+        ]);
+        let created = portal::request(&connection, INTERFACE, "CreateSession", &(options,))?;
         let session: String = created
             .get("session_handle")
             .context("portal returned no session")?
@@ -124,6 +130,8 @@ impl Remote {
 
     /// Scroll by whole steps; positive is down or right.
     pub fn scroll(&self, steps: i32, horizontal: bool) -> Result<()> {
+        // The KDE portal reads a step as one degree of a 15-degree wheel notch.
+        let steps = if kde() { steps * 15 } else { steps };
         self.notify(
             "NotifyPointerAxisDiscrete",
             &(&self.session, Options::new(), u32::from(horizontal), steps),
@@ -157,6 +165,14 @@ impl Drop for Remote {
             &(),
         );
     }
+}
+
+fn kde() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| {
+        desktop
+            .split(':')
+            .any(|part| part.eq_ignore_ascii_case("KDE"))
+    })
 }
 
 fn token_path() -> Option<std::path::PathBuf> {

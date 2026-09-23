@@ -275,7 +275,16 @@ impl Pointer {
         #[cfg(target_os = "linux")]
         if self.portal.is_some() {
             for character in text.chars() {
-                self.key(Key::Unicode(character), Direction::Click)?;
+                // The KDE portal applies a keysym's Shift one key late, so hold it here.
+                let shifted = character.is_ascii_graphic() && !plain(character);
+                if shifted {
+                    self.key(Key::Shift, Direction::Press)?;
+                }
+                let typed = self.key(Key::Unicode(character), Direction::Click);
+                if shifted {
+                    self.key(Key::Shift, Direction::Release)?;
+                }
+                typed?;
             }
             return Ok(());
         }
