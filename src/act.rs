@@ -39,7 +39,7 @@ pub(crate) fn run(steps: &[String], area: &Area) -> Result<()> {
                 let known = current(&mut snapshot, &[target])?;
                 let element = known.find(target)?;
                 pointer.click(element.x, element.y, Button::Left, 1)?;
-                println!("{element}");
+                out!("{element}");
                 if verb == "fill" {
                     pointer.wait_for_focus();
                     pointer.type_text(text)?;
@@ -48,7 +48,7 @@ pub(crate) fn run(steps: &[String], area: &Area) -> Result<()> {
             "wait" => {
                 let known = wait(argument, WAIT_TIMEOUT, false, area)?;
                 if let Some(element) = known.matches(argument).first() {
-                    println!("{element}");
+                    out!("{element}");
                 }
                 snapshot = Some(known);
                 continue;
@@ -65,7 +65,7 @@ pub(crate) fn run(steps: &[String], area: &Area) -> Result<()> {
                 let known = current(&mut snapshot, &[from, to])?;
                 let (start, end) = (known.find(from)?, known.find(to)?);
                 pointer.drag((start.x, start.y), (end.x, end.y))?;
-                println!("{start}\n{end}");
+                out!("{start}\n{end}");
             }
             "focus" => {
                 let windows = read::placements();

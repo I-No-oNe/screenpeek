@@ -25,9 +25,12 @@ what is installed.
 ## How it picks a language
 
 With languages chosen, screenpeek still reads the screen with its fast
-built-in reader first. Only when some lines come out garbled (a sign of
-another script) does it re-read **just those lines** with Tesseract. A screen
-in English costs nothing extra, and lines already read are remembered.
+built-in reader first. When enough lines come out garbled (a sign of another
+script), it re-reads **all the lines** with Tesseract, because some text in
+another script can look like ordinary English to the built-in reader. That
+full-screen pass takes a few seconds, but lines already re-read are
+remembered, so later scans only re-read what changed. A screen that reads
+cleanly costs nothing extra.
 
 You can also choose per command:
 

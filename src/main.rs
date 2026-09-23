@@ -1,5 +1,18 @@
 //! screenpeek: read the screen as numbered text, then click it by name.
 
+/// `println!` for command output that ends the command quietly when a reader such
+/// as `head` closes the pipe early, instead of panicking.
+macro_rules! out {
+    ($($arg:tt)*) => {{
+        use std::io::Write;
+        if let Err(error) = writeln!(std::io::stdout(), $($arg)*) {
+            if error.kind() == std::io::ErrorKind::BrokenPipe {
+                std::process::exit(0);
+            }
+        }
+    }};
+}
+
 mod act;
 mod caller;
 mod capture;
@@ -59,7 +72,7 @@ fn main() -> Result<()> {
             } else {
                 act(&mut pointer)?;
             }
-            println!("{element}");
+            out!("{element}");
         }
 
         Command::Wait {
@@ -72,8 +85,8 @@ fn main() -> Result<()> {
                 .context("--timeout must be a positive number of seconds")?;
             let snapshot = wait(&target, timeout, gone, &area)?;
             match snapshot.matches(&target).first() {
-                Some(element) => println!("{element}"),
-                None => println!("{target} is gone"),
+                Some(element) => out!("{element}"),
+                None => out!("{target} is gone"),
             }
         }
 
@@ -108,7 +121,7 @@ fn main() -> Result<()> {
             };
             let (start, end) = (snapshot.find(&from)?, snapshot.find(&to)?);
             pointer.drag((start.x, start.y), (end.x, end.y))?;
-            println!("{start}\n{end}");
+            out!("{start}\n{end}");
         }
 
         Command::Windows { json } => {
@@ -121,11 +134,11 @@ fn main() -> Result<()> {
                         "width": w.width, "height": w.height, "focused": w.focused})
                     })
                     .collect();
-                println!("{}", serde_json::to_string_pretty(&listed)?);
+                out!("{}", serde_json::to_string_pretty(&listed)?);
             } else {
                 windows
                     .iter()
-                    .for_each(|window| println!("{}", describe(window)));
+                    .for_each(|window| out!("{}", describe(window)));
             }
         }
 
@@ -133,7 +146,7 @@ fn main() -> Result<()> {
             let windows = read::placements();
             let window = pick_window(&windows, &title)?;
             focus_window(window)?;
-            println!("{}", describe(window));
+            out!("{}", describe(window));
         }
 
         Command::Type { text } => Pointer::new()?.type_text(&text)?,
@@ -152,21 +165,24 @@ fn main() -> Result<()> {
             let windows = read::atspi::windows()?;
             let elapsed = started.elapsed();
             for window in &windows {
-                println!("{} ({}x{})", window.title, window.width, window.height);
+                out!("{} ({}x{})", window.title, window.width, window.height);
                 for item in &window.items {
                     let role = item.role.unwrap_or("-");
-                    println!(
+                    out!(
                         "  {role} {} @{},{} {:?}",
-                        item.text, item.x, item.y, item.states
+                        item.text,
+                        item.x,
+                        item.y,
+                        item.states
                     );
                 }
             }
             eprintln!("{} window(s) in {}ms", windows.len(), elapsed.as_millis());
         }
 
-        Command::Languages => println!("{}", read::tesseract::installed()?.join("\n")),
+        Command::Languages => out!("{}", read::tesseract::installed()?.join("\n")),
 
-        Command::Status => println!("{}", daemon::endpoint_summary()?),
+        Command::Status => out!("{}", daemon::endpoint_summary()?),
 
         Command::Doctor => doctor::doctor(),
 
@@ -174,7 +190,7 @@ fn main() -> Result<()> {
         Command::Portal => {
             let started = std::time::Instant::now();
             let capture = capture::portal::Portal::new()?.capture()?;
-            println!(
+            out!(
                 "portal capture {}x{} in {}ms",
                 capture.image.width(),
                 capture.image.height(),
@@ -209,7 +225,7 @@ fn main() -> Result<()> {
             pointer.click(element.x, element.y, Button::Left, 1)?;
             pointer.wait_for_focus();
             pointer.type_text(&text)?;
-            println!("{element}");
+            out!("{element}");
         }
     }
 

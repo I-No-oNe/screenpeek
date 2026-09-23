@@ -25,8 +25,8 @@ pub(crate) fn doctor() {
 
 fn report(part: &str, result: Result<String>) {
     match result {
-        Ok(detail) => println!("ok   {part}: {detail}"),
-        Err(error) => println!("fix  {part}: {error:#}"),
+        Ok(detail) => out!("ok   {part}: {detail}"),
+        Err(error) => out!("fix  {part}: {error:#}"),
     }
 }
 
@@ -34,7 +34,7 @@ fn report(part: &str, result: Result<String>) {
 fn platform() {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".into());
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".into());
-    println!("     desktop: {desktop} on {session}");
+    out!("     desktop: {desktop} on {session}");
     report(
         "capture",
         capture::Backend::new().map(|backend| backend.name().to_owned()),
@@ -57,7 +57,7 @@ fn platform() {
         read::geometry::windows().map(|windows| format!("{} visible", windows.len())),
     );
     if read::geometry_helper::outdated_extension() {
-        println!("fix  GNOME extension: an older copy is running; log out and back in to load the new one");
+        out!("fix  GNOME extension: an older copy is running; log out and back in to load the new one");
     }
     report(
         "accessibility",
@@ -68,7 +68,7 @@ fn platform() {
 
 #[cfg(windows)]
 fn platform() {
-    println!("     desktop: Windows");
+    out!("     desktop: Windows");
     report(
         "capture",
         capture::screen(None, None).map(|shot| {
@@ -93,7 +93,7 @@ fn platform() {
 
 #[cfg(not(any(target_os = "linux", windows)))]
 fn platform() {
-    println!("     desktop: not supported yet");
+    out!("     desktop: not supported yet");
 }
 
 /// Whether the KDE and GNOME frame helper is installed and its libraries load.
