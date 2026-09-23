@@ -1,6 +1,6 @@
 [package]
 name = "screenpeek-frames"
-version = "0.0.1-alpha"
+version = "0.0.2-alpha"
 edition = "2021"
 description = "PipeWire screen frames for screenpeek on KDE and GNOME"
 license = "MIT"
