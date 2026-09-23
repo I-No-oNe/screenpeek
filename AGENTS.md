@@ -37,6 +37,6 @@ cargo test --locked
 - The subject is 50 characters or fewer, in the imperative: `Fix X on Y`.
 - Add a body only when the reason isn't obvious. Keep it to a few lines.
 - The author is the GitHub account's Gmail address, set with
-  `git config user.email <account>@gmail.com`. Never use a noreply address.
+  `git config user.email github-account-gmail`. Never use a noreply address.
 - This repo is public. Write patterns, not real data: no emails, tokens,
   webhooks or personal paths in code, docs or commits.
