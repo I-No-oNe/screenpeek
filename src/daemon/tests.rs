@@ -1,3 +1,5 @@
+use std::fs;
+
 use super::*;
 
 /// A tree that names what recognition finds may stand in for those pixels;

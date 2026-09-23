@@ -13,7 +13,23 @@ permissions:
   contents: write
 
 jobs:
+  # The frame helper needs a newer PipeWire than 22.04 has. Only it is built on 24.04;
+  # the main binary stays on 22.04 to keep running on older systems.
+  frames:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev clang pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release -p screenpeek-frames
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenpeek-frames
+          path: target/release/screenpeek-frames
+
   binaries:
+    needs: frames
     strategy:
       matrix:
         include:
@@ -28,21 +44,25 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config libpipewire-0.3-dev clang
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --locked --release --target ${{ matrix.target }}
 
-      # The frame helper links libpipewire, so it is its own binary and Linux only.
-      - name: Build the frame helper (Linux)
+      - name: Add the frame helper (Linux)
         if: runner.os == 'Linux'
-        run: cargo build --locked --release --target ${{ matrix.target }} -p screenpeek-frames
+        uses: actions/download-artifact@v4
+        with:
+          name: screenpeek-frames
+          path: target/${{ matrix.target }}/release
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
-        run: tar -czf ${{ matrix.archive }} -C target/${{ matrix.target }}/release screenpeek screenpeek-frames
+        run: |
+          chmod +x target/${{ matrix.target }}/release/screenpeek-frames
+          tar -czf ${{ matrix.archive }} -C target/${{ matrix.target }}/release screenpeek screenpeek-frames
 
       - name: Package (Windows)
         if: runner.os == 'Windows'

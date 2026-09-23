@@ -1,16 +1,13 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::sleep;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use image::RgbaImage;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -20,20 +17,17 @@ use crate::index::{self, Element};
 use crate::pointer::Input;
 use crate::read::{Engine, Language, Placement};
 
+mod client;
 mod diff;
-use diff::{dirty_areas, merge_bands, worth_patching};
+mod endpoint;
 
-/// How long a freshly started daemon is given to load its models.
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+use client::connect;
+pub use client::{act, ask, available, endpoint_summary};
+use diff::{dirty_areas, merge_bands, worth_patching};
+use endpoint::{new_token, release_endpoint, write_endpoint};
 
 /// How long a connected client may take to send its request.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// How long a client waits for an answer before reading the screen itself.
-const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Input may wait on the desktop's permission dialog the first time.
-const INPUT_TIMEOUT: Duration = Duration::from_secs(130);
 
 /// How old input must be before a frame is trusted to show it.
 const SETTLE: Duration = Duration::from_millis(120);
@@ -173,13 +167,6 @@ impl Activity {
             return Some("no session left using it");
         }
         None
-    }
-}
-
-/// Remove the endpoint only if it still belongs to this daemon.
-fn release_endpoint(port: u16) {
-    if matches!(read_endpoint(), Ok((listed, _)) if listed == port) {
-        let _ = endpoint_path().map(fs::remove_file);
     }
 }
 
@@ -786,182 +773,12 @@ impl Session {
     }
 }
 
-/// Whether commands may go through the daemon.
-pub fn available() -> bool {
-    std::env::var_os("SCREENPEEK_NO_DAEMON").is_none()
-}
-
-/// Have the daemon perform input with its portal session.
-pub fn act(input: Input) -> Result<()> {
-    let mut stream = match connect() {
-        Some(stream) => stream,
-        None => {
-            start().context("cannot start the daemon for input")?;
-            connect().context("cannot reach the daemon for input")?
-        }
-    };
-    let (_, token) = read_endpoint()?;
-    let request = Request {
-        token,
-        session: owning_session(),
-        input: Some(input),
-        ..Default::default()
-    };
-    let mut line = serde_json::to_vec(&request)?;
-    line.push(b'\n');
-    stream.set_read_timeout(Some(INPUT_TIMEOUT))?;
-    stream.write_all(&line)?;
-    let mut reply = String::new();
-    BufReader::new(&stream).read_line(&mut reply)?;
-    match serde_json::from_str(&reply).context("the daemon did not answer the input")? {
-        Response::Elements { .. } => Ok(()),
-        Response::Error(error) => bail!(error),
-    }
-}
-
-/// Ask the daemon, starting it if needed; `None` means read directly.
-pub fn ask(
-    region: Option<Region>,
-    monitor: Option<usize>,
-    lang: Option<Language>,
-    excluded: Vec<Region>,
-) -> Option<Vec<Element>> {
-    if std::env::var_os("SCREENPEEK_NO_DAEMON").is_some() {
-        return None;
-    }
-    let mut stream = match connect() {
-        Some(stream) => stream,
-        None => {
-            start()?;
-            connect()?
-        }
-    };
-    let (_, token) = read_endpoint().ok()?;
-
-    let request = Request {
-        token,
-        region,
-        monitor,
-        session: owning_session(),
-        lang,
-        excluded,
-        input: None,
-    };
-    let mut line = serde_json::to_vec(&request).ok()?;
-    line.push(b'\n');
-    stream.set_read_timeout(Some(ANSWER_TIMEOUT)).ok()?;
-    stream.write_all(&line).ok()?;
-
-    let mut reply = String::new();
-    BufReader::new(&stream).read_line(&mut reply).ok()?;
-    match serde_json::from_str(&reply).ok()? {
-        Response::Elements { elements } => Some(elements),
-        Response::Error(error) => {
-            eprintln!("screenpeek: the daemon refused: {error}");
-            None
-        }
-    }
-}
-
-#[cfg(unix)]
-fn owning_session() -> u32 {
-    std::os::unix::process::parent_id()
-}
-
-#[cfg(not(unix))]
-fn owning_session() -> u32 {
-    0
-}
-
-fn connect() -> Option<TcpStream> {
-    let (port, _) = read_endpoint().ok()?;
-    TcpStream::connect((Ipv4Addr::LOCALHOST, port)).ok()
-}
-
-fn start() -> Option<()> {
-    let binary = std::env::current_exe().ok()?;
-    Command::new(binary)
-        .arg("serve")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-
-    let deadline = Instant::now() + STARTUP_TIMEOUT;
-    while Instant::now() < deadline {
-        if connect().is_some() {
-            return Some(());
-        }
-        sleep(Duration::from_millis(100));
-    }
-    None
-}
-
-pub fn endpoint_summary() -> Result<String> {
-    let (port, _) = read_endpoint().context("no daemon is running")?;
-    if TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err() {
-        bail!("no daemon is running; the last one used port {port}");
-    }
-    Ok(format!("a daemon is listening on 127.0.0.1:{port}"))
-}
-
 fn read_request(stream: &mut TcpStream) -> Result<Request> {
     let mut line = String::new();
     BufReader::new(stream)
         .read_line(&mut line)
         .context("cannot read the request")?;
     serde_json::from_str(&line).context("cannot parse the request")
-}
-
-fn endpoint_path() -> Result<PathBuf> {
-    Ok(dirs::cache_dir()
-        .ok_or_else(|| anyhow!("no cache directory on this system"))?
-        .join("screenpeek")
-        .join("daemon-v3"))
-}
-
-fn write_endpoint(port: u16, token: &str) -> Result<()> {
-    let path = endpoint_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let partial = path.with_extension("partial");
-    fs::write(&partial, format!("{port} {token}"))
-        .with_context(|| format!("cannot write {}", partial.display()))?;
-    owner_only(&partial)?;
-    fs::rename(&partial, &path).with_context(|| format!("cannot write {}", path.display()))
-}
-
-#[cfg(unix)]
-fn owner_only(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("cannot restrict {}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn owner_only(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-fn read_endpoint() -> Result<(u16, String)> {
-    let raw = fs::read_to_string(endpoint_path()?)?;
-    let (port, token) = raw
-        .split_once(' ')
-        .ok_or_else(|| anyhow!("the daemon file is malformed"))?;
-    Ok((port.parse()?, token.to_owned()))
-}
-
-fn new_token() -> String {
-    let mut hasher = DefaultHasher::new();
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|age| age.as_nanos())
-        .unwrap_or(0)
-        .hash(&mut hasher);
-    std::process::id().hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
 }
 
 #[cfg(test)]
