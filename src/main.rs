@@ -5,7 +5,6 @@ mod caller;
 mod capture;
 mod cli;
 mod daemon;
-#[cfg(target_os = "linux")]
 mod doctor;
 mod index;
 mod look;
@@ -169,7 +168,6 @@ fn main() -> Result<()> {
 
         Command::Status => println!("{}", daemon::endpoint_summary()?),
 
-        #[cfg(target_os = "linux")]
         Command::Doctor => doctor::doctor(),
 
         #[cfg(target_os = "linux")]

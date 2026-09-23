@@ -6,7 +6,8 @@ languages it uses [Tesseract](https://github.com/tesseract-ocr/tesseract).
 ## Add a language
 
 1. Install Tesseract: `sudo dnf install tesseract` or
-   `sudo apt-get install tesseract-ocr`.
+   `sudo apt-get install tesseract-ocr`. On Windows:
+   `winget install UB-Mannheim.TesseractOCR`.
 2. Pick languages:
 
    ```sh
@@ -14,6 +15,9 @@ languages it uses [Tesseract](https://github.com/tesseract-ocr/tesseract).
    bash scripts/fetch-models.sh heb jpn  # or name them
    bash scripts/fetch-models.sh --none   # back to English only
    ```
+
+   On Windows, `scripts/fetch-models.ps1` does the same (`-None` for English
+   only); `install.ps1` runs it for you.
 
 That's it: screenpeek finds the data by itself. `screenpeek languages` lists
 what is installed.

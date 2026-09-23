@@ -158,8 +158,31 @@ fn finish(mut child: Child, image: &RgbaImage, language: &str) -> Result<String>
 }
 
 /// `tesseract`, pointed at the user's language data when none is configured.
+/// How to get Tesseract on this system.
+#[cfg(windows)]
+pub const INSTALL_HINT: &str = "install Tesseract: winget install UB-Mannheim.TesseractOCR";
+#[cfg(not(windows))]
+pub const INSTALL_HINT: &str = "install tesseract with your package manager";
+
+/// The Tesseract program: on PATH, or where its Windows installer puts it.
+fn program() -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let on_path = std::env::var_os("PATH").is_some_and(|path| {
+            std::env::split_paths(&path).any(|dir| dir.join("tesseract.exe").is_file())
+        });
+        let installed = std::env::var_os("ProgramFiles")
+            .map(|dir| std::path::Path::new(&dir).join(r"Tesseract-OCR\tesseract.exe"))
+            .filter(|path| path.is_file());
+        if let (false, Some(installed)) = (on_path, installed) {
+            return installed;
+        }
+    }
+    "tesseract".into()
+}
+
 fn command() -> Command {
-    let mut command = Command::new("tesseract");
+    let mut command = Command::new(program());
     if std::env::var_os("TESSDATA_PREFIX").is_none() {
         if let Some(directory) = user_tessdata().filter(|directory| directory.is_dir()) {
             command.env("TESSDATA_PREFIX", directory);

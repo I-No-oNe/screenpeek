@@ -41,6 +41,12 @@ cd screenpeek
 sh install.sh
 ```
 
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/I-No-oNe/screenpeek/main/install.ps1 | iex
+```
+
 The installer asks which extra languages to read (Hebrew, Arabic, Chinese...).
 Press Enter for none; you can change it later.
 

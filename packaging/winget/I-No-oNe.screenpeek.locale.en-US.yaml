@@ -1,0 +1,16 @@
+PackageIdentifier: I-No-oNe.screenpeek
+PackageVersion: 0.0.2-alpha
+PackageLocale: en-US
+Publisher: I-No-oNe
+PackageName: screenpeek
+PackageUrl: https://github.com/I-No-oNe/screenpeek
+License: MIT
+LicenseUrl: https://github.com/I-No-oNe/screenpeek/blob/main/LICENSE
+ShortDescription: Read desktop apps as text and click controls by name
+Tags:
+- ocr
+- automation
+- accessibility
+- ai-agents
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

@@ -39,6 +39,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: screenpeek-x86_64-windows.zip
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            archive: screenpeek-aarch64-windows.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -63,13 +66,41 @@ jobs:
         run: |
           chmod +x target/${{ matrix.target }}/release/screenpeek-frames
           tar -czf ${{ matrix.archive }} -C target/${{ matrix.target }}/release screenpeek screenpeek-frames
+          sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path target/${{ matrix.target }}/release/screenpeek.exe -DestinationPath ${{ matrix.archive }}
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/screenpeek.exe -DestinationPath ${{ matrix.archive }}
+          $hash = (Get-FileHash ${{ matrix.archive }} -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD/${{ matrix.archive }}.sha256", "$hash  ${{ matrix.archive }}`n")
 
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
-          files: ${{ matrix.archive }}
+          files: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
+
+  # Scoop and winget manifests follow each release; winget still needs a pull
+  # request to microsoft/winget-pkgs, which a maintainer sends.
+  manifests:
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          mkdir sums
+          gh release download "$TAG" --pattern '*-windows.zip.sha256' --dir sums
+          python3 scripts/package-manifests.py "${TAG#v}" sums
+          git add bucket packaging
+          git diff --cached --quiet && exit 0
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "Update Scoop and winget manifests for $TAG"
+          git push

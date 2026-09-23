@@ -15,7 +15,21 @@
 
 **Release binary (Linux x86-64):** `sh install.sh` puts `screenpeek` in
 `~/.local/bin` (set `PREFIX` to change it) and asks which extra languages to
-read. Windows binaries are on the Releases page.
+read.
+
+**Windows (x64 and ARM64):** in PowerShell,
+`irm https://raw.githubusercontent.com/I-No-oNe/screenpeek/main/install.ps1 | iex`
+installs to `%LOCALAPPDATA%\screenpeek\bin` (set `SCREENPEEK_PREFIX` to change
+it), adds it to your PATH, and offers the agent skill and extra languages. With
+[Scoop](https://scoop.sh):
+
+```powershell
+scoop bucket add screenpeek https://github.com/I-No-oNe/screenpeek
+scoop install screenpeek
+```
+
+Both installers check each download against the `.sha256` file published next
+to it.
 
 **From source:** needs a recent Rust (see `rust-version` in `Cargo.toml`).
 

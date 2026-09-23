@@ -18,11 +18,20 @@ if command -v gh >/dev/null 2>&1; then
   tag=$(gh release list --repo "$repo" --limit 1 --json tagName --jq '.[0].tagName')
   [ -n "$tag" ] || { echo "no release found" >&2; exit 1; }
   gh release download "$tag" --repo "$repo" --pattern "$archive" --dir "$tmp"
+  gh release download "$tag" --repo "$repo" --pattern "$archive.sha256" --dir "$tmp" 2>/dev/null || true
 else
   tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=1" \
     | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
   [ -n "$tag" ] || { echo "no release found" >&2; exit 1; }
   curl -fsSL -o "$tmp/$archive" "https://github.com/$repo/releases/download/$tag/$archive"
+  curl -fsSL -o "$tmp/$archive.sha256" "https://github.com/$repo/releases/download/$tag/$archive.sha256" 2>/dev/null \
+    || rm -f "$tmp/$archive.sha256"
+fi
+
+# Releases list a checksum beside each download; older ones have none.
+if [ -f "$tmp/$archive.sha256" ]; then
+  (cd "$tmp" && sha256sum -c --quiet "$archive.sha256") || { echo "$archive does not match its checksum" >&2; exit 1; }
+  echo "checksum ok"
 fi
 
 tar -xzf "$tmp/$archive" -C "$tmp"

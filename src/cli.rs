@@ -150,7 +150,6 @@ pub(crate) enum Command {
     Status,
 
     /// Check what this desktop supports and what is missing
-    #[cfg(target_os = "linux")]
     Doctor,
 
     /// Capture once through the desktop portal, for checking GNOME and KDE

@@ -25,6 +25,7 @@ jobs:
       - run: cargo test --workspace --locked
       - run: node tests/helpers.mjs
       - run: python3 -m doctest bench/compare_tools.py
+      - run: python3 -m doctest scripts/package-manifests.py
 
   windows:
     runs-on: windows-latest
@@ -33,9 +34,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: aarch64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
+      - name: ARM64 builds too
+        run: cargo check --locked --target aarch64-pc-windows-msvc
+      - run: cargo run --locked -- doctor
+      - name: install.ps1 in PowerShell 7
+        shell: pwsh
+        env:
+          SCREENPEEK_PREFIX: ${{ runner.temp }}\pwsh7
+        run: |
+          ./install.ps1
+          & "$env:SCREENPEEK_PREFIX\screenpeek.exe" --version
+      - name: install.ps1 in Windows PowerShell 5.1, the irm | iex way
+        shell: powershell
+        env:
+          SCREENPEEK_PREFIX: ${{ runner.temp }}\ps51
+        run: |
+          $before = $ProgressPreference
+          Get-Content ./install.ps1 -Raw | Invoke-Expression
+          & "$env:SCREENPEEK_PREFIX\screenpeek.exe" --version
+          if ($ProgressPreference -ne $before) { throw 'install.ps1 changed the caller session' }
+      - name: Languages
+        shell: pwsh
+        run: |
+          ./scripts/fetch-models.ps1 heb
+          if (-not (Test-Path "$env:APPDATA\tessdata\heb.traineddata")) { throw 'heb was not fetched' }
+          cargo run --locked -- doctor
 
   gnome:
     runs-on: ubuntu-24.04
