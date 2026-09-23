@@ -18,6 +18,9 @@ const DRAG_STEP: Duration = Duration::from_millis(15);
 /// Time for keys already sent through the portal to arrive before text is committed.
 const KEY_FLUSH: Duration = Duration::from_millis(60);
 
+/// Time around a KDE layout switch for queued keys and the new keymap to settle.
+const LAYOUT_SWITCH: Duration = Duration::from_millis(150);
+
 /// Time for a new keyboard's keymap to land. Raise if characters go missing.
 const KEYMAP_DELAY: Duration = Duration::from_millis(30);
 
@@ -112,6 +115,8 @@ fn named(key: &str) -> Result<Key> {
     })
 }
 
+#[cfg(target_os = "linux")]
+mod kde;
 #[cfg(target_os = "linux")]
 mod portal;
 #[cfg(target_os = "linux")]
@@ -374,6 +379,9 @@ impl Pointer {
                 if crate::read::geometry_helper::commit(text) {
                     return Ok(());
                 }
+                if let Some(layouts) = kde::Layouts::new() {
+                    return self.type_in_layouts(text, &layouts);
+                }
             }
             return self.type_keys(text);
         }
@@ -397,6 +405,32 @@ impl Pointer {
             }
         }
         Ok(())
+    }
+
+    /// Type each run of text in a KDE layout that has its letters, then switch back.
+    #[cfg(target_os = "linux")]
+    fn type_in_layouts(&mut self, text: &str, layouts: &kde::Layouts) -> Result<()> {
+        let original = layouts.active;
+        let mut active = original;
+        let mut start = 0;
+        let mut typed = Ok(());
+        for (index, character) in text.char_indices().chain([(text.len(), ' ')]) {
+            let wanted = match index < text.len() {
+                true => layouts.for_char(character, original).unwrap_or(active),
+                false => original,
+            };
+            if wanted == active {
+                continue;
+            }
+            typed = typed.and_then(|()| self.type_keys(&text[start..index]));
+            // Keys still on their way would use the new layout, and the switch needs a moment.
+            sleep(LAYOUT_SWITCH);
+            layouts.set(wanted);
+            sleep(LAYOUT_SWITCH);
+            (active, start) = (wanted, index);
+        }
+        // The end of the text switched back to the original layout.
+        typed.and_then(|()| self.type_keys(&text[start..]))
     }
 
     /// Type through the portal one key at a time.

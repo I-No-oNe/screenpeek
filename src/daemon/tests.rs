@@ -96,6 +96,8 @@ fn patch_preserves_duplicate_bands_across_cache_eviction() {
         #[cfg(target_os = "linux")]
         desk: None,
         #[cfg(target_os = "linux")]
+        opening: None,
+        #[cfg(target_os = "linux")]
         frames: None,
         #[cfg(target_os = "linux")]
         frames_failed: false,
@@ -146,6 +148,8 @@ fn fixture_scan_scenarios() {
         covered: HashMap::new(),
         #[cfg(target_os = "linux")]
         desk: None,
+        #[cfg(target_os = "linux")]
+        opening: None,
         #[cfg(target_os = "linux")]
         frames: None,
         #[cfg(target_os = "linux")]

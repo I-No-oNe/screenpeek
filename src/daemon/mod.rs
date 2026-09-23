@@ -225,6 +225,9 @@ struct Session {
     /// The portal session input and frames share, on KDE and GNOME.
     #[cfg(target_os = "linux")]
     desk: Option<crate::pointer::Desk>,
+    /// The session being opened, which can wait on a permission dialog.
+    #[cfg(target_os = "linux")]
+    opening: Option<std::thread::JoinHandle<Result<crate::pointer::Desk>>>,
     #[cfg(target_os = "linux")]
     frames: Option<capture::frames::Frames>,
     /// Once the screen stream fails, screenshots are used instead.
@@ -307,6 +310,7 @@ impl Session {
                 tree: HashMap::new(),
                 covered: HashMap::new(),
                 desk: None,
+                opening: None,
                 frames: None,
                 frames_failed: false,
                 last_input: None,
@@ -329,10 +333,8 @@ impl Session {
         self.last_input = Some(Instant::now());
         #[cfg(target_os = "linux")]
         {
-            let desk = match self.desk.take() {
-                Some(desk) => desk,
-                None => crate::pointer::Desk::open()?,
-            };
+            self.open_desk(true)?;
+            let desk = self.desk.take().expect("desk opened");
             let (done, desk) = desk.perform(input);
             self.desk = desk;
             if done.is_err() {
@@ -613,12 +615,14 @@ impl Session {
             let portal = matches!(self.capturer, capture::Backend::Portal);
             if portal && monitor.is_none() && !self.frames_failed {
                 match self.frame() {
-                    Ok(full) => {
+                    Ok(Some(full)) => {
                         return match region {
                             Some(region) => capture::crop(full, region),
                             None => Ok(full),
                         }
                     }
+                    // Screenshots meanwhile, while the permission dialog is open.
+                    Ok(None) => {}
                     Err(error) => {
                         eprintln!("screenpeek: no screen stream, using screenshots: {error:#}");
                         self.frames = None;
@@ -746,11 +750,27 @@ fn context_key(monitor: Option<usize>, origin: (i32, i32), excluded: &[Region]) 
 
 #[cfg(target_os = "linux")]
 impl Session {
-    /// The latest frame of the portal's screen stream.
-    fn frame(&mut self) -> Result<Capture> {
+    /// Open the portal session in the background; with `wait`, until it is open.
+    fn open_desk(&mut self, wait: bool) -> Result<bool> {
+        if self.desk.is_some() {
+            return Ok(true);
+        }
+        let opening = self
+            .opening
+            .get_or_insert_with(|| std::thread::spawn(crate::pointer::Desk::open));
+        if !wait && !opening.is_finished() {
+            return Ok(false);
+        }
+        let opened = self.opening.take().expect("opening").join();
+        self.desk = Some(opened.map_err(|_| anyhow!("opening the portal session panicked"))??);
+        Ok(true)
+    }
+
+    /// The latest frame of the portal's screen stream, or none while it opens.
+    fn frame(&mut self) -> Result<Option<Capture>> {
         if self.frames.is_none() {
-            if self.desk.is_none() {
-                self.desk = Some(crate::pointer::Desk::open()?);
+            if !self.open_desk(false)? {
+                return Ok(None);
             }
             let (remote, screens) = self.desk.as_ref().expect("desk opened").screens()?;
             self.frames = Some(capture::frames::Frames::start(remote, screens)?);
@@ -762,6 +782,7 @@ impl Session {
             .as_mut()
             .expect("frames started")
             .capture(settle)
+            .map(Some)
     }
 }
 
