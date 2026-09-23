@@ -534,6 +534,9 @@ fn doctor() {
         "windows",
         read::geometry::windows().map(|windows| format!("{} visible", windows.len())),
     );
+    if read::geometry_helper::outdated_extension() {
+        println!("fix  GNOME extension: an older copy is running; log out and back in to load the new one");
+    }
     report(
         "accessibility",
         read::atspi::windows()

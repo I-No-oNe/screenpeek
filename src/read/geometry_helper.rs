@@ -44,6 +44,22 @@ pub fn focus(handle: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether GNOME runs an older copy of the extension, from before the last update.
+pub fn outdated_extension() -> bool {
+    let Ok(connection) = Connection::session() else {
+        return false;
+    };
+    let described: zbus::Result<String> = Proxy::new(
+        &connection,
+        INTERFACE,
+        PATH,
+        "org.freedesktop.DBus.Introspectable",
+    )
+    .and_then(|proxy| proxy.call("Introspect", &()));
+    // Commit is the newest method; GNOME loads new extension code only at login.
+    described.is_ok_and(|xml| !xml.contains("Commit"))
+}
+
 /// Type text through the GNOME extension's input method; false when it cannot.
 pub fn commit(text: &str) -> bool {
     Connection::session()
