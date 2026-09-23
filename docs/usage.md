@@ -71,7 +71,9 @@ screenpeek scroll down 5 --at Results
 screenpeek drag report.pdf Trash
 ```
 
-Names match ignoring case: exact first, then "starts with", then "contains".
+Names are looked for in the focused window first, which is several times
+faster, then on the whole screen. They match ignoring case: exact first, then
+"starts with", then "contains".
 Small OCR mistakes and accents are tolerated (`Fi1e` finds `File`). When a
 name matches several things, nothing is clicked and the choices are listed:
 use the id instead.

@@ -316,7 +316,7 @@ fn main() -> Result<()> {
             let snapshot = if snapshot.can_resolve(&to) {
                 snapshot
             } else {
-                Snapshot::new(scan(&area)?)
+                scan_for(&[&from, &to], &area)?
             };
             let (start, end) = (snapshot.find(&from)?, snapshot.find(&to)?);
             pointer.drag((start.x, start.y), (end.x, end.y))?;
@@ -444,7 +444,7 @@ fn run(steps: &[String], area: &Area) -> Result<()> {
                     false => Ok(Snapshot::new(scan(area)?)),
                 }
             }
-            _ => Ok(Snapshot::new(scan(area)?)),
+            _ => scan_for(targets, area),
         }
     };
 
@@ -769,6 +769,27 @@ fn resolve(target: &str, fresh: bool, area: &Area) -> Result<Snapshot> {
         }
     }
 
+    scan_for(&[target], area)
+}
+
+/// A fresh scan for `targets`: the focused window first, several times faster
+/// than the whole screen, which is read only when the window lacks a target.
+fn scan_for(targets: &[&str], area: &Area) -> Result<Snapshot> {
+    let whole = area.region.is_none() && area.monitor.is_none() && !area.focused;
+    // Ids number the last whole listing, so they need the whole screen.
+    let names = targets.iter().all(|t| t.parse::<usize>().is_err());
+    if whole && names {
+        let window = Area {
+            focused: true,
+            ..area.clone()
+        };
+        if let Ok(elements) = scan(&window) {
+            let snapshot = Snapshot::new(elements);
+            if targets.iter().all(|t| snapshot.can_resolve(t)) {
+                return Ok(snapshot);
+            }
+        }
+    }
     Ok(Snapshot::new(scan(area)?))
 }
 
