@@ -45,10 +45,10 @@ wait_for 30 gdbus introspect --session -d org.screenpeek.Windows -o /org/screenp
 /usr/libexec/at-spi2-registryd &
 
 # The portal names a host program after its systemd scope, or "" without one.
-scope=$(sed -n 's|.*/||p' /proc/self/cgroup | head -1)
-app=${scope#app-}; app=${app%.scope}; app=${app%-*}
-case $app in *-*) app=${app#*-} ;; esac
-for id in "" "$app"; do
+# Units look like app-[LAUNCHER-]ID-RANDOM.scope or app-[LAUNCHER-]ID@RANDOM.service.
+unit=$(sed -n 's|.*/||p' /proc/self/cgroup | head -1)
+app=${unit#app-}; app=${app%.scope}; app=${app%.service}; app=${app%%@*}; app=${app%-[0-9]*}
+for id in "" "$app" "${app#*-}"; do
   busctl --user call org.freedesktop.impl.portal.PermissionStore \
     /org/freedesktop/impl/portal/PermissionStore org.freedesktop.impl.portal.PermissionStore \
     SetPermission sbssas screenshot true screenshot "$id" 1 yes

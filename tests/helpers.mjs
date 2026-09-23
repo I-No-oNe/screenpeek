@@ -17,14 +17,16 @@ const inputMethod = {currentFocus: null, commit: text => { committed = text; }};
 const context = {Extension: class {}, Main: {activateWindow: window => { activated = window; }, inputMethod}, Meta: {WindowType: {NORMAL: 0, DIALOG: 4, DESKTOP: 1}}, global: {
     workspace_manager: {get_active_workspace: () => ({})},
     get_window_actors: () => [
-        {meta_window: {...visible, get_id: () => 3}, opacity: 255},
-        {meta_window: visible, opacity: 255},
-        {meta_window: {...visible, minimized: true}, opacity: 255},
-        {meta_window: {...visible, located_on_workspace: () => false}, opacity: 255},
-        {meta_window: {...visible, get_window_type: () => 1}, opacity: 255},
-        {meta_window: {...visible, get_opacity: () => 0}, opacity: 255},
+        {meta_window: {...visible, get_id: () => 3}},
+        {meta_window: visible},
+        {meta_window: {...visible, minimized: true}},
+        {meta_window: {...visible, located_on_workspace: () => false}},
+        {meta_window: {...visible, get_window_type: () => 1}},
+        {meta_window: visible, surface: 0},
         {meta_window: visible, opacity: 0},
-    ],
+        {meta_window: {...visible, get_wm_class: () => 'xwaylandvideobridge'}},
+    ].map(({meta_window, opacity = 255, surface = 255}) =>
+        ({meta_window, opacity, get_children: () => [{opacity: surface}]})),
 }};
 vm.runInNewContext(source, context);
 let windows = JSON.parse(new context.Screenpeek().List());

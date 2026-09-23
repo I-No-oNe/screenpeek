@@ -21,9 +21,13 @@ export default class Screenpeek extends Extension {
 
     List() {
         const workspace = global.workspace_manager.get_active_workspace();
-        // Fully transparent windows, like the Xwayland video bridge, are not on screen.
+        // Mutter puts an X11 window's opacity on the surface inside its actor, so a fully
+        // transparent window (like the Xwayland video bridge) has a child at opacity 0.
+        const transparent = actor => actor.opacity === 0
+            || actor.get_children().some(child => child.opacity === 0)
+            || actor.meta_window.get_wm_class?.() === 'xwaylandvideobridge';
         return JSON.stringify(global.get_window_actors()
-            .filter(actor => actor.opacity > 0 && (actor.meta_window.get_opacity?.() ?? 255) > 0)
+            .filter(actor => !transparent(actor))
             .map(actor => actor.meta_window)
             .filter(window => !window.minimized && window.located_on_workspace(workspace)
                 && [Meta.WindowType.NORMAL, Meta.WindowType.DIALOG].includes(window.get_window_type())
