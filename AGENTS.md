@@ -27,6 +27,12 @@ cargo test --locked
   run clippy for Linux and Windows.
 - Speed is the point. Anything that waits on another process (D-Bus, IPC,
   portals) needs a timeout. Never add a sleep without saying why it is needed.
+- A change must keep accuracy, speed and performance the same or better.
+  If it touches capture, reading or input, compare `bench/measure.py`
+  before and after, and give the numbers in the PR.
+- Remove dead code: unused functions, imports, cfg branches and stale
+  comments. CLI commands and flags are exempt, since users and scripts call
+  them even when nothing in the code does.
 - Coordinates are logical desktop pixels on Linux and physical pixels on Windows.
 - Keep diffs small. Don't refactor or reformat code you weren't asked to touch.
 - Comments explain why, in one short line. Don't narrate what the code does.
