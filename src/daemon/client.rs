@@ -25,6 +25,7 @@ pub(super) const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const INPUT_TIMEOUT: Duration = Duration::from_secs(130);
 
 /// Whether commands may go through the daemon.
+#[cfg(target_os = "linux")]
 pub fn available() -> bool {
     std::env::var_os("SCREENPEEK_NO_DAEMON").is_none()
 }

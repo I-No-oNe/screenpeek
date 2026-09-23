@@ -16,9 +16,11 @@ const FOCUS_DELAY: Duration = Duration::from_millis(120);
 const DRAG_STEP: Duration = Duration::from_millis(15);
 
 /// Time for keys already sent through the portal to arrive before text is committed.
+#[cfg(target_os = "linux")]
 const KEY_FLUSH: Duration = Duration::from_millis(60);
 
 /// Time around a KDE layout switch for queued keys and the new keymap to settle.
+#[cfg(target_os = "linux")]
 const LAYOUT_SWITCH: Duration = Duration::from_millis(150);
 
 /// Time for a new keyboard's keymap to land. Raise if characters go missing.

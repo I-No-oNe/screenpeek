@@ -141,7 +141,7 @@ fn rgba(bytes: &[u8], width: u32, height: u32, stride: usize, format: &str) -> R
     }
     let mut pixels = Vec::with_capacity(row * height as usize);
     for line in bytes.chunks_exact(stride).take(height as usize) {
-        for pixel in line[..row].chunks_exact(4) {
+        for pixel in line[..row].as_chunks::<4>().0 {
             let (red, blue) = match blue_first {
                 true => (pixel[2], pixel[0]),
                 false => (pixel[0], pixel[2]),

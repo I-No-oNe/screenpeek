@@ -40,6 +40,7 @@ pub fn regions(windows: &[Placement]) -> Vec<Region> {
 }
 
 /// The parts of a terminal window that no window in front of it covers.
+#[cfg(target_os = "linux")]
 fn uncovered(terminal: &Placement, windows: &[Placement]) -> Vec<Region> {
     windows
         .iter()
@@ -58,6 +59,7 @@ fn uncovered(terminal: &Placement, windows: &[Placement]) -> Vec<Region> {
 }
 
 /// The parts of `area` outside `hole`, as up to four rectangles.
+#[cfg(target_os = "linux")]
 fn minus(area: Region, hole: Region) -> Vec<Region> {
     let (left, top) = (area.x.max(hole.x), area.y.max(hole.y));
     let right = (area.x + area.width as i32).min(hole.x + hole.width as i32);
@@ -110,6 +112,7 @@ mod tests {
         assert_eq!(parent_pid("invalid"), None);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_window_in_front_is_cut_out_of_the_terminal() {
         let region = |x, y, width, height| Region {
@@ -128,6 +131,7 @@ mod tests {
         assert_eq!(minus(region(0, 0, 10, 10), region(50, 50, 5, 5)).len(), 1);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn only_windows_in_front_are_cut_out_of_the_terminal() {
         let window = |pid, x, stack| Placement {

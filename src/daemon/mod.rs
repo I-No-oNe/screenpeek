@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+#[cfg(target_os = "linux")]
+use anyhow::anyhow;
+use anyhow::{Context, Result};
 use image::RgbaImage;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -21,8 +23,10 @@ mod client;
 mod diff;
 mod endpoint;
 
+#[cfg(target_os = "linux")]
+pub use client::available;
 use client::connect;
-pub use client::{act, ask, available, endpoint_summary};
+pub use client::{act, ask, endpoint_summary};
 use diff::{dirty_areas, merge_bands, worth_patching};
 use endpoint::{new_token, release_endpoint, write_endpoint};
 
@@ -30,6 +34,7 @@ use endpoint::{new_token, release_endpoint, write_endpoint};
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How old input must be before a frame is trusted to show it.
+#[cfg(target_os = "linux")]
 const SETTLE: Duration = Duration::from_millis(120);
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
