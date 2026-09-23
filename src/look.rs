@@ -38,7 +38,7 @@ pub(crate) fn scan(area: &Area) -> Result<Vec<Element>> {
     let region = area.region(&windows)?;
     let language = resolve_language(area.lang.as_deref())?;
     let excluded = caller::regions(&windows);
-    let mut elements = match controls(region) {
+    let mut elements = match controls(region, area.monitor) {
         Some(elements) => elements,
         None => match daemon::ask(region, area.monitor, language.clone(), excluded.clone()) {
             Some(elements) => elements,
@@ -177,7 +177,11 @@ fn with_tree_text(
 }
 
 #[cfg(windows)]
-fn controls(region: Option<Region>) -> Option<Vec<Element>> {
+fn controls(region: Option<Region>, monitor: Option<usize>) -> Option<Vec<Element>> {
+    let region = match monitor {
+        Some(index) => Some(capture::monitor_bounds(index).ok()?),
+        None => region,
+    };
     let elements = match read::ui::elements() {
         Ok(elements) if !elements.is_empty() => elements,
         Ok(_) => return None,
@@ -196,6 +200,6 @@ fn controls(region: Option<Region>) -> Option<Vec<Element>> {
 }
 
 #[cfg(not(windows))]
-fn controls(_region: Option<Region>) -> Option<Vec<Element>> {
+fn controls(_region: Option<Region>, _monitor: Option<usize>) -> Option<Vec<Element>> {
     None
 }

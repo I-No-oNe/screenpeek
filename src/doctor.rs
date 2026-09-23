@@ -17,9 +17,14 @@ pub(crate) fn doctor() {
                 .context(read::tesseract::INSTALL_HINT),
         );
     }
+    let log = daemon::log_path()
+        .map(|path| format!(", log in {}", path.display()))
+        .unwrap_or_default();
     report(
         "daemon",
-        daemon::endpoint_summary().or_else(|_| Ok("starts on the first scan".into())),
+        daemon::endpoint_summary()
+            .or_else(|_| Ok("starts on the first scan".into()))
+            .map(|summary| summary + &log),
     );
 }
 

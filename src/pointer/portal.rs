@@ -18,7 +18,7 @@ pub struct Remote {
 
 impl Remote {
     pub fn new() -> Result<Self> {
-        let connection = Connection::session()?;
+        let connection = portal::session()?;
         // xdg-desktop-portal 1.22 needs a distinct token for every request and session.
         let handle = |step: &str| Value::from(format!("screenpeek{}_{step}", std::process::id()));
         let options = Options::from([

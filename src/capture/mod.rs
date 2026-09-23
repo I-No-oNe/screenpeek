@@ -241,6 +241,16 @@ fn primary(monitors: &[Monitor]) -> Result<&Monitor> {
     monitors.first().ok_or_else(|| anyhow!("no monitors found"))
 }
 
+/// Where monitor `index` sits on the desktop.
+#[cfg(not(target_os = "linux"))]
+pub fn monitor_bounds(index: usize) -> Result<Region> {
+    let monitors = Monitor::all().context("cannot enumerate monitors")?;
+    let monitor = monitors
+        .get(index)
+        .ok_or_else(|| anyhow!("no monitor {index}; found {}", monitors.len()))?;
+    bounds(monitor)
+}
+
 #[cfg(not(target_os = "linux"))]
 fn bounds(monitor: &Monitor) -> Result<Region> {
     Ok(Region {

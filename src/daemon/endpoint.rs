@@ -1,10 +1,9 @@
 //! The file that tells clients where the daemon listens, and its token.
 
-use std::collections::hash_map::DefaultHasher;
+use std::collections::hash_map::RandomState;
 use std::fs;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 
@@ -20,6 +19,11 @@ pub(super) fn endpoint_path() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("no cache directory on this system"))?
         .join("screenpeek")
         .join("daemon-v3"))
+}
+
+/// Where a daemon started by a command writes what it did and why it failed.
+pub fn log_path() -> Result<PathBuf> {
+    Ok(endpoint_path()?.with_file_name("daemon.log"))
 }
 
 pub(super) fn write_endpoint(port: u16, token: &str) -> Result<()> {
@@ -54,13 +58,8 @@ pub(super) fn read_endpoint() -> Result<(u16, String)> {
     Ok((port.parse()?, token.to_owned()))
 }
 
+/// 128 random bits: `RandomState` is seeded by the operating system.
 pub(super) fn new_token() -> String {
-    let mut hasher = DefaultHasher::new();
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|age| age.as_nanos())
-        .unwrap_or(0)
-        .hash(&mut hasher);
-    std::process::id().hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    let random = || RandomState::new().build_hasher().finish();
+    format!("{:016x}{:016x}", random(), random())
 }

@@ -1,6 +1,6 @@
 //! KDE keyboard layouts, to type scripts the active layout has no keys for.
 
-use zbus::blocking::{Connection, Proxy};
+use zbus::blocking::Proxy;
 
 pub struct Layouts {
     proxy: Proxy<'static>,
@@ -12,7 +12,7 @@ pub struct Layouts {
 impl Layouts {
     pub fn new() -> Option<Layouts> {
         let proxy = Proxy::new(
-            &Connection::session().ok()?,
+            &crate::portal::session().ok()?,
             "org.kde.keyboard",
             "/Layouts",
             "org.kde.KeyboardLayouts",

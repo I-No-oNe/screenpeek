@@ -4,13 +4,13 @@ use super::geometry::{placement_of, HyprlandClient};
 use super::Placement;
 use anyhow::{Context, Result};
 use std::{io::Write, sync::mpsc, time::Duration};
-use zbus::blocking::{connection::Builder, Connection, Proxy};
+use zbus::blocking::{connection::Builder, Proxy};
 
 const INTERFACE: &str = "org.screenpeek.Windows";
 const PATH: &str = "/org/screenpeek/Windows";
 
 pub fn windows() -> Result<Vec<Placement>> {
-    let connection = Connection::session()?;
+    let connection = crate::portal::session()?;
     let listed: String = Proxy::new(&connection, INTERFACE, PATH, INTERFACE)?
         .call("List", &())
         .or_else(|_| kwin(include_str!("../../helpers/kwin/windows.js"), ""))
@@ -29,7 +29,7 @@ fn missing_helper() -> &'static str {
 }
 
 pub fn focus(handle: &str) -> Result<()> {
-    let connection = Connection::session()?;
+    let connection = crate::portal::session()?;
     let focused =
         match Proxy::new(&connection, INTERFACE, PATH, INTERFACE)?.call("Focus", &(handle,)) {
             Ok(focused) => focused,
@@ -46,7 +46,7 @@ pub fn focus(handle: &str) -> Result<()> {
 
 /// Whether GNOME runs an older copy of the extension, from before the last update.
 pub fn outdated_extension() -> bool {
-    let Ok(connection) = Connection::session() else {
+    let Ok(connection) = crate::portal::session() else {
         return false;
     };
     let described: zbus::Result<String> = Proxy::new(
@@ -62,7 +62,7 @@ pub fn outdated_extension() -> bool {
 
 /// Type text through the GNOME extension's input method; false when it cannot.
 pub fn commit(text: &str) -> bool {
-    Connection::session()
+    crate::portal::session()
         .and_then(|connection| {
             Proxy::new(&connection, INTERFACE, PATH, INTERFACE)?.call("Commit", &(text,))
         })
@@ -88,6 +88,7 @@ impl Receiver {
 fn kwin(source: &str, preamble: &str) -> Result<String, zbus::Error> {
     let (sender, receiver) = mpsc::sync_channel(1);
     let connection = Builder::session()?
+        .method_timeout(Duration::from_secs(5))
         .serve_at(PATH, Receiver(sender))?
         .build()?;
     let scripting = Proxy::new(

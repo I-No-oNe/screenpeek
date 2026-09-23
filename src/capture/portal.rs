@@ -14,7 +14,7 @@ pub struct Portal {
 
 impl Portal {
     pub fn new() -> Result<Portal> {
-        let connection = Connection::session().context("no session bus")?;
+        let connection = crate::portal::session().context("no session bus")?;
         // Fail early when no screenshot portal is running.
         let _: u32 = connection
             .call_method(
@@ -24,7 +24,10 @@ impl Portal {
                 "Get",
                 &("org.freedesktop.portal.Screenshot", "version"),
             )
-            .context("no screenshot portal on this session")?
+            .context(
+                "the screenshot portal did not answer; if a dialog such as a keyring prompt is \
+                 open, answer it, else run `systemctl --user restart xdg-desktop-portal`",
+            )?
             .body()
             .deserialize::<OwnedValue>()
             .ok()

@@ -41,6 +41,7 @@ zbus = { version = "5", default-features = false, features = ["blocking-api", "a
 
 [target.'cfg(windows)'.dependencies]
 uiautomation = "0.25"
+windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [workspace]
 members = [".", "frames"]

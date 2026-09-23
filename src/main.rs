@@ -38,6 +38,10 @@ use cli::{Cli, Command};
 use look::{resolve, resolve_language, scan, scan_for, wait};
 
 fn main() -> Result<()> {
+    // Capture, UI Automation and input then all use physical pixels; without
+    // it, scaled displays give each a different coordinate space.
+    #[cfg(windows)]
+    let _ = enigo::set_dpi_awareness();
     match Cli::parse().command {
         Command::Scan { grep, area, json } => {
             let elements = scan(&area)?;

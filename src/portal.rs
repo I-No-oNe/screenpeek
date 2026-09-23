@@ -10,6 +10,17 @@ pub const SERVICE: &str = "org.freedesktop.portal.Desktop";
 pub const PATH: &str = "/org/freedesktop/portal/desktop";
 pub type Values = HashMap<String, OwnedValue>;
 
+/// Longest a desktop service may take to answer one call. Consent dialogs
+/// answer through signals, so this only catches a service that is stuck.
+const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The session bus, with calls that give up instead of hanging the command.
+pub fn session() -> zbus::Result<Connection> {
+    zbus::blocking::connection::Builder::session()?
+        .method_timeout(CALL_TIMEOUT)
+        .build()
+}
+
 pub fn request<B: Serialize + DynamicType>(
     connection: &Connection,
     interface: &str,

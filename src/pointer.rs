@@ -6,8 +6,10 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+#[cfg(not(windows))]
+use enigo::Coordinate;
 pub use enigo::Direction;
-use enigo::{Axis, Button as EnigoButton, Coordinate, Enigo, Key, Keyboard, Mouse, Settings};
+use enigo::{Axis, Button as EnigoButton, Enigo, Key, Keyboard, Mouse, Settings};
 
 /// Time for a clicked widget to take focus before typing into it.
 const FOCUS_DELAY: Duration = Duration::from_millis(120);
@@ -170,9 +172,7 @@ impl Pointer {
         Ok(Pointer {
             enigo: Some(new_enigo()?),
             #[cfg(target_os = "linux")]
-            desktop: wayland_client::Connection::connect_to_env()
-                .ok()
-                .and_then(|_| crate::capture::wayland::logical_desktop()),
+            desktop: crate::capture::wayland::logical_desktop(),
             #[cfg(target_os = "linux")]
             portal: None,
             daemon: false,
@@ -216,16 +216,24 @@ impl Pointer {
         if let Some(portal) = &self.portal {
             return portal.move_to(x, y);
         }
-        #[allow(unused_mut)]
-        let (mut x_sent, mut y_sent) = (x, y);
-        #[cfg(target_os = "linux")]
-        if let Some(desktop) = self.desktop {
-            let extent = self.enigo()?.main_display()?;
-            (x_sent, y_sent) = on_virtual_pointer((x, y), desktop, extent);
-        }
-        self.enigo()?
-            .move_mouse(x_sent, y_sent, Coordinate::Abs)
-            .with_context(|| format!("cannot move the pointer to {x},{y}"))
+        // enigo's absolute move spans only the primary monitor on Windows.
+        #[cfg(windows)]
+        let moved = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y) }
+            .map_err(anyhow::Error::from);
+        #[cfg(not(windows))]
+        let moved = {
+            #[allow(unused_mut)]
+            let (mut x_sent, mut y_sent) = (x, y);
+            #[cfg(target_os = "linux")]
+            if let Some(desktop) = self.desktop {
+                let extent = self.enigo()?.main_display()?;
+                (x_sent, y_sent) = on_virtual_pointer((x, y), desktop, extent);
+            }
+            self.enigo()?
+                .move_mouse(x_sent, y_sent, Coordinate::Abs)
+                .map_err(anyhow::Error::from)
+        };
+        moved.with_context(|| format!("cannot move the pointer to {x},{y}"))
     }
 
     pub fn button(&mut self, button: Button, direction: Direction) -> Result<()> {

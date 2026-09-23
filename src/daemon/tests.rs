@@ -270,3 +270,11 @@ fn fixture_scan_scenarios() {
     )
     .unwrap();
 }
+
+/// The token is all that stops another local user driving this desktop.
+#[test]
+fn tokens_are_long_and_never_repeat() {
+    let (first, second) = (endpoint::new_token(), endpoint::new_token());
+    assert_eq!(first.len(), 32);
+    assert_ne!(first, second);
+}

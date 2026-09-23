@@ -116,10 +116,13 @@ fn monitors(connection: &RustConnection, root: Window) -> Result<Vec<Region>> {
         return Ok(vec![whole]);
     };
 
-    let mut monitors: Vec<Region> = reply
+    let shown: Vec<_> = reply
         .monitors
         .iter()
         .filter(|monitor| monitor.width > 0 && monitor.height > 0)
+        .collect();
+    let mut monitors: Vec<Region> = shown
+        .iter()
         .map(|monitor| Region {
             x: monitor.x as i32,
             y: monitor.y as i32,
@@ -129,7 +132,7 @@ fn monitors(connection: &RustConnection, root: Window) -> Result<Vec<Region>> {
         .collect();
 
     // The primary monitor is reported first, so a bare scan reads it.
-    if let Some(primary) = reply.monitors.iter().position(|monitor| monitor.primary) {
+    if let Some(primary) = shown.iter().position(|monitor| monitor.primary) {
         monitors.swap(0, primary);
     }
 

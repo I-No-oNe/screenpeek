@@ -2732,6 +2732,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+ "windows 0.62.2",
  "x11rb",
  "xcap",
  "xkeysym",

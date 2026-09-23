@@ -71,7 +71,12 @@ fn x11_focus(window: u32) -> Result<()> {
     use x11rb::protocol::xproto::{ClientMessageEvent, ConnectionExt, EventMask};
 
     let (connection, preferred) = x11rb::connect(None).context("no X display")?;
-    let root = connection.setup().roots[preferred].root;
+    let root = connection
+        .setup()
+        .roots
+        .get(preferred)
+        .ok_or_else(|| anyhow!("no screen {preferred}"))?
+        .root;
     let active = connection
         .intern_atom(false, b"_NET_ACTIVE_WINDOW")?
         .reply()?
@@ -136,7 +141,10 @@ fn x11() -> Result<Vec<Placement>> {
 
     let mut placements = Vec::new();
     for window in windows {
-        let attributes = connection.get_window_attributes(window)?.reply()?;
+        // A window may close while it is listed; skip it rather than fail them all.
+        let Ok(attributes) = connection.get_window_attributes(window)?.reply() else {
+            continue;
+        };
         if attributes.map_state != MapState::VIEWABLE {
             continue;
         }
@@ -153,10 +161,14 @@ fn x11() -> Result<Vec<Placement>> {
             }
         }
 
-        let geometry = connection.get_geometry(window)?.reply()?;
-        let position = connection
-            .translate_coordinates(window, root, 0, 0)?
-            .reply()?;
+        let (Ok(geometry), Ok(position)) = (
+            connection.get_geometry(window)?.reply(),
+            connection
+                .translate_coordinates(window, root, 0, 0)?
+                .reply(),
+        ) else {
+            continue;
+        };
 
         let title = text_property(&connection, window, net_name, utf8)?
             .or(text_property(

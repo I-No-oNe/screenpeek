@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
-use super::endpoint::read_endpoint;
+use super::endpoint::{log_path, read_endpoint};
 use super::{Request, Response};
 use crate::capture::Region;
 use crate::index::Element;
@@ -119,11 +119,17 @@ pub(super) fn connect() -> Option<TcpStream> {
 
 pub(super) fn start() -> Option<()> {
     let binary = std::env::current_exe().ok()?;
+    let log = log_path()
+        .and_then(|path| {
+            std::fs::create_dir_all(path.parent().context("no log directory")?)?;
+            Ok(std::fs::File::create(path)?)
+        })
+        .map_or_else(|_| Stdio::null(), Stdio::from);
     Command::new(binary)
         .arg("serve")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(log)
         .spawn()
         .ok()?;
 

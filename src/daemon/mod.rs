@@ -28,6 +28,7 @@ pub use client::available;
 use client::connect;
 pub use client::{act, ask, endpoint_summary};
 use diff::{dirty_areas, merge_bands, worth_patching};
+pub use endpoint::log_path;
 use endpoint::{new_token, release_endpoint, write_endpoint};
 
 /// How long a connected client may take to send its request.
@@ -128,10 +129,10 @@ pub fn serve() -> Result<()> {
                 };
                 match looked {
                     Ok(elements) => Response::Elements { elements },
-                    Err(error) => Response::Error(error.to_string()),
+                    Err(error) => Response::Error(format!("{error:#}")),
                 }
             }
-            Err(error) => Response::Error(error.to_string()),
+            Err(error) => Response::Error(format!("{error:#}")),
         };
 
         let mut line = serde_json::to_vec(&response)?;

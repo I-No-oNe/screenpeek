@@ -20,6 +20,9 @@ const COORDS_WINDOW: u32 = 1;
 const MAX_NODES: usize = 1500;
 const MAX_TIME: Duration = Duration::from_millis(400);
 
+/// An application that stops answering costs one scan this long, not a hang.
+const CALL_TIMEOUT: Duration = Duration::from_secs(1);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Item {
     pub text: String,
@@ -47,7 +50,9 @@ pub fn windows() -> Result<Vec<Window>> {
 /// Return window metadata for skipped trees so cached items can be reused.
 pub fn windows_where(wanted: impl Fn(&Window) -> bool + Sync) -> Result<Vec<Window>> {
     let bus = address().context("no accessibility bus")?;
-    let connection = Builder::address(bus.as_str())?.build()?;
+    let connection = Builder::address(bus.as_str())?
+        .method_timeout(CALL_TIMEOUT)
+        .build()?;
 
     let frames: Vec<_> = children(&connection, REGISTRY, ROOT)
         .into_par_iter()
@@ -71,7 +76,7 @@ pub fn windows_where(wanted: impl Fn(&Window) -> bool + Sync) -> Result<Vec<Wind
 }
 
 fn address() -> Result<String> {
-    let session = Connection::session()?;
+    let session = crate::portal::session()?;
     // Qt apps (all of KDE) publish their tree only once this is on.
     let _ = session.call_method(
         Some("org.a11y.Bus"),
@@ -121,9 +126,14 @@ fn read_items(connection: &Connection, name: &str, root: &OwnedObjectPath) -> Ve
     while !level.is_empty() && seen < MAX_NODES && started.elapsed() < MAX_TIME {
         level.truncate(MAX_NODES - seen);
         seen += level.len();
+        // One wide level can outlast the budget, since toolkits such as
+        // Firefox answer one call at a time; skip what is left of it.
         let visited: Vec<_> = level
             .par_iter()
-            .map(|path| visit(connection, name, path))
+            .map(|path| match started.elapsed() < MAX_TIME {
+                true => visit(connection, name, path),
+                false => (None, Vec::new()),
+            })
             .collect();
         level = Vec::new();
         for (item, children) in visited {
