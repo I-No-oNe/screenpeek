@@ -24,6 +24,7 @@ const KEY_FLUSH: Duration = Duration::from_millis(60);
 const LAYOUT_SWITCH: Duration = Duration::from_millis(150);
 
 /// Time for a new keyboard's keymap to land. Raise if characters go missing.
+#[cfg(target_os = "linux")]
 const KEYMAP_DELAY: Duration = Duration::from_millis(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -94,6 +95,7 @@ impl Desk {
     pub fn perform(self, input: Input) -> (Result<()>, Option<Desk>) {
         let mut pointer = Pointer {
             enigo: None,
+            desktop: None,
             portal: Some(self.0),
             daemon: false,
         };
@@ -104,6 +106,9 @@ impl Desk {
 
 pub struct Pointer {
     enigo: Option<Enigo>,
+    /// The logical desktop as x, y, width and height, when on Wayland.
+    #[cfg(target_os = "linux")]
+    desktop: Option<(i32, i32, u32, u32)>,
     #[cfg(target_os = "linux")]
     portal: Option<portal::Remote>,
     /// Hand input to the daemon, which keeps a portal session open.
@@ -118,9 +123,30 @@ fn new_enigo() -> Result<Enigo> {
         // Avoid sending every input event through both Wayland and XWayland.
         settings.x11_display = Some("screenpeek-disabled".into());
     }
-    Enigo::new(&settings).context(
+    let enigo = Enigo::new(&settings).context(
         "cannot reach the input backend; on Wayland the compositor must support the \
          virtual pointer and virtual keyboard protocols",
+    )?;
+    // Keys sent before a new keyboard's keymap lands are dropped.
+    #[cfg(target_os = "linux")]
+    sleep(KEYMAP_DELAY);
+    Ok(enigo)
+}
+
+/// enigo scales absolute motion by the first output's mode in pixels, while
+/// wlroots compositors spread it over the logical desktop, so convert.
+#[cfg(target_os = "linux")]
+fn on_virtual_pointer(
+    (x, y): (i32, i32),
+    (left, top, width, height): (i32, i32, u32, u32),
+    (extent_x, extent_y): (i32, i32),
+) -> (i32, i32) {
+    let scale = |value: i32, origin: i32, size: u32, extent: i32| {
+        (f64::from(value - origin) * f64::from(extent) / f64::from(size)).round() as i32
+    };
+    (
+        scale(x, left, width, extent_x),
+        scale(y, top, height, extent_y),
     )
 }
 
@@ -134,6 +160,7 @@ impl Pointer {
             if crate::daemon::available() {
                 return Ok(Pointer {
                     enigo: None,
+                    desktop: None,
                     portal: None,
                     daemon: true,
                 });
@@ -142,6 +169,10 @@ impl Pointer {
         }
         Ok(Pointer {
             enigo: Some(new_enigo()?),
+            #[cfg(target_os = "linux")]
+            desktop: wayland_client::Connection::connect_to_env()
+                .ok()
+                .and_then(|_| crate::capture::wayland::logical_desktop()),
             #[cfg(target_os = "linux")]
             portal: None,
             daemon: false,
@@ -153,6 +184,7 @@ impl Pointer {
     fn local_portal() -> Result<Pointer> {
         Ok(Pointer {
             enigo: None,
+            desktop: None,
             portal: Some(Desk::open()?.0),
             daemon: false,
         })
@@ -184,8 +216,15 @@ impl Pointer {
         if let Some(portal) = &self.portal {
             return portal.move_to(x, y);
         }
+        #[allow(unused_mut)]
+        let (mut x_sent, mut y_sent) = (x, y);
+        #[cfg(target_os = "linux")]
+        if let Some(desktop) = self.desktop {
+            let extent = self.enigo()?.main_display()?;
+            (x_sent, y_sent) = on_virtual_pointer((x, y), desktop, extent);
+        }
         self.enigo()?
-            .move_mouse(x, y, Coordinate::Abs)
+            .move_mouse(x_sent, y_sent, Coordinate::Abs)
             .with_context(|| format!("cannot move the pointer to {x},{y}"))
     }
 
@@ -339,7 +378,6 @@ impl Pointer {
             let reuse = wayland && plain(character);
             if self.enigo.is_none() || !reuse {
                 self.enigo = Some(new_enigo()?);
-                sleep(KEYMAP_DELAY);
             }
             self.enigo()?
                 .text(character.encode_utf8(&mut [0; 4]))
@@ -416,5 +454,26 @@ mod tests {
         assert_eq!("left".parse::<Button>().unwrap(), Button::Left);
         assert_eq!("RIGHT".parse::<Button>().unwrap(), Button::Right);
         assert!("scroll".parse::<Button>().is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn virtual_pointer_spreads_over_the_logical_desktop() {
+        // One 1920x1080 output at scale 1.25, as reported in issue #1.
+        let desktop = (0, 0, 1536, 864);
+        assert_eq!(
+            on_virtual_pointer((283, 649), desktop, (1920, 1080)),
+            (354, 811)
+        );
+        // Unscaled outputs pass through unchanged.
+        assert_eq!(
+            on_virtual_pointer((283, 649), (0, 0, 1920, 1080), (1920, 1080)),
+            (283, 649)
+        );
+        // A second monitor to the left moves the origin.
+        assert_eq!(
+            on_virtual_pointer((0, 0), (-1280, 0, 3200, 1080), (1920, 1080)),
+            (768, 0)
+        );
     }
 }
