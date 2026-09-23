@@ -38,5 +38,7 @@ cargo test --locked
 - Add a body only when the reason isn't obvious. Keep it to a few lines.
 - The author is the GitHub account's Gmail address, set with
   `git config user.email github-account-gmail`. Never use a noreply address.
+- Never mention the AI tool or model in commits, PRs, comments or code: no
+  `Co-Authored-By` trailers and no "Generated with" lines.
 - This repo is public. Write patterns, not real data: no emails, tokens,
   webhooks or personal paths in code, docs or commits.
