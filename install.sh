@@ -29,7 +29,16 @@ tar -xzf "$tmp/$archive" -C "$tmp"
 mkdir -p "$prefix"
 install -m 755 "$tmp/screenpeek" "$prefix/screenpeek"
 echo "installed $tag to $prefix/screenpeek"
-"$prefix/screenpeek" --version
+
+# Shared libraries the binary cannot find, named by the package that has them.
+missing=""
+for lib in $(ldd "$prefix/screenpeek" 2>/dev/null | awk '/not found/ {print $1}'); do
+  case $lib in
+    libxkbcommon*) missing="$missing xkbcommon" ;;
+    *) missing="$missing $lib" ;;
+  esac
+done
+[ -n "$missing" ] || "$prefix/screenpeek" --version
 
 # Offer extra languages when someone is at the terminal to answer.
 if [ -t 0 ] && [ -t 1 ]; then
@@ -40,4 +49,48 @@ if [ -t 0 ] && [ -t 1 ]; then
     curl -fsSL "https://raw.githubusercontent.com/$repo/main/scripts/fetch-models.sh" -o "$tmp/fetch-models.sh"
     bash "$tmp/fetch-models.sh"
   fi
+fi
+
+# Other languages are read with tesseract, which comes from the system.
+languages=${XDG_CONFIG_HOME:-$HOME/.config}/screenpeek/languages
+if [ -s "$languages" ] && ! command -v tesseract >/dev/null 2>&1; then
+  missing="$missing tesseract"
+fi
+
+if [ -n "$missing" ]; then
+  # Checked in this order so rpm-ostree wins on Silverblue, dnf over yum.
+  if command -v rpm-ostree >/dev/null 2>&1; then
+    install="sudo rpm-ostree install" xkb=libxkbcommon tess=tesseract
+  elif command -v dnf >/dev/null 2>&1; then
+    install="sudo dnf install" xkb=libxkbcommon tess=tesseract
+  elif command -v yum >/dev/null 2>&1; then
+    install="sudo yum install" xkb=libxkbcommon tess=tesseract
+  elif command -v apt-get >/dev/null 2>&1; then
+    install="sudo apt-get install" xkb=libxkbcommon0 tess=tesseract-ocr
+  elif command -v pacman >/dev/null 2>&1; then
+    install="sudo pacman -S" xkb=libxkbcommon tess=tesseract
+  elif command -v zypper >/dev/null 2>&1; then
+    install="sudo zypper install" xkb=libxkbcommon0 tess=tesseract-ocr
+  elif command -v xbps-install >/dev/null 2>&1; then
+    install="sudo xbps-install" xkb=libxkbcommon tess=tesseract-ocr
+  elif command -v apk >/dev/null 2>&1; then
+    install="sudo apk add" xkb=libxkbcommon tess=tesseract-ocr
+  elif command -v emerge >/dev/null 2>&1; then
+    install="sudo emerge" xkb=x11-libs/libxkbcommon tess=app-text/tesseract
+  elif command -v eopkg >/dev/null 2>&1; then
+    install="sudo eopkg install" xkb=libxkbcommon tess=tesseract
+  else
+    install="install with your package manager:" xkb=libxkbcommon tess=tesseract
+  fi
+  packages=""
+  for name in $missing; do
+    case $name in
+      xkbcommon) packages="$packages $xkb" ;;
+      tesseract) packages="$packages $tess" ;;
+      *) packages="$packages $name" ;;
+    esac
+  done
+  echo
+  echo "screenpeek still needs some packages. Install them with:"
+  echo "  $install$packages"
 fi
