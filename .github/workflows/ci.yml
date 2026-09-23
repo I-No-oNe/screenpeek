@@ -45,6 +45,7 @@ jobs:
         shell: pwsh
         env:
           SCREENPEEK_PREFIX: ${{ runner.temp }}\pwsh7
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           ./install.ps1
           & "$env:SCREENPEEK_PREFIX\screenpeek.exe" --version
@@ -52,6 +53,7 @@ jobs:
         shell: powershell
         env:
           SCREENPEEK_PREFIX: ${{ runner.temp }}\ps51
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $before = $ProgressPreference
           Get-Content ./install.ps1 -Raw | Invoke-Expression

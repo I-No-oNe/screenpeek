@@ -15,7 +15,10 @@
 
     # The newest release with a build for this machine; alphas count too.
     # Assigned first: Windows PowerShell 5.1 passes a JSON array on as one object.
-    $releases = Invoke-RestMethod "https://api.github.com/repos/$repo/releases?per_page=20"
+    # A token, when set, lifts the shared rate limit of unauthenticated calls.
+    $auth = @{}
+    if ($env:GITHUB_TOKEN) { $auth.Authorization = "Bearer $env:GITHUB_TOKEN" }
+    $releases = Invoke-RestMethod "https://api.github.com/repos/$repo/releases?per_page=20" -Headers $auth
     $release = $releases | Where-Object { $_.assets.name -contains $archives[-1] } | Select-Object -First 1
     if (-not $release) { throw "no release has a Windows build yet" }
     $archive = $archives | Where-Object { $release.assets.name -contains $_ } | Select-Object -First 1
