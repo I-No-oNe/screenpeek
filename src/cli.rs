@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
 use crate::capture::Region;
+use crate::desktop;
 use crate::pointer::Button;
-use crate::read;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -213,7 +213,7 @@ pub(crate) struct Area {
 
 impl Area {
     /// The part of the desktop to read, with `--focused` resolved.
-    pub(crate) fn region(&self, windows: &[read::Placement]) -> Result<Option<Region>> {
+    pub(crate) fn region(&self, windows: &[desktop::Placement]) -> Result<Option<Region>> {
         if !self.focused {
             return Ok(self.region);
         }

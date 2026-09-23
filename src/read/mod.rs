@@ -4,10 +4,6 @@
 pub mod atspi;
 #[cfg(target_os = "linux")]
 pub mod fuse;
-#[cfg(target_os = "linux")]
-pub mod geometry;
-#[cfg(target_os = "linux")]
-pub mod geometry_helper;
 pub mod language;
 pub mod tesseract;
 #[cfg(windows)]
@@ -26,46 +22,10 @@ use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
 use rten::Model;
 use rten_imageproc::{bounding_rect, BoundingRect, Rect, RotatedRect};
 
-use crate::capture::{Capture, Region};
+use crate::capture::Capture;
+use crate::desktop::Placement;
 use crate::index::{Element, Source};
 pub use language::Language;
-
-/// A visible window as the compositor reports it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Placement {
-    pub title: String,
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
-    pub focused: bool,
-    pub pid: Option<u32>,
-    /// The compositor's own name for the window, used to focus it.
-    pub handle: Option<String>,
-    /// Position from the back, when the desktop reports stacking order.
-    pub stack: Option<u32>,
-}
-
-impl Placement {
-    pub fn rect(&self) -> Region {
-        Region {
-            x: self.x,
-            y: self.y,
-            width: self.width,
-            height: self.height,
-        }
-    }
-}
-
-/// Visible windows, or none when the compositor cannot be asked.
-pub fn placements() -> Vec<Placement> {
-    #[cfg(target_os = "linux")]
-    return geometry::windows().unwrap_or_default();
-    #[cfg(windows)]
-    return ui::windows().unwrap_or_default();
-    #[cfg(not(any(target_os = "linux", windows)))]
-    Vec::new()
-}
 
 /// Sorted window edges, where recognition must stop joining text.
 pub fn edges(placements: &[Placement]) -> Vec<i32> {

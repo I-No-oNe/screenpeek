@@ -18,6 +18,7 @@ mod caller;
 mod capture;
 mod cli;
 mod daemon;
+mod desktop;
 mod doctor;
 mod index;
 mod look;
@@ -33,7 +34,7 @@ use clap::Parser;
 use index::Element;
 use pointer::{Button, Pointer};
 
-use act::{checked, describe, focus_window, pick_window, run, scroll};
+use act::{checked, describe, pick_window, run, scroll};
 use cli::{Cli, Command};
 use look::{resolve, resolve_language, scan, scan_for, wait};
 
@@ -129,7 +130,7 @@ fn main() -> Result<()> {
         }
 
         Command::Windows { json } => {
-            let windows = read::placements();
+            let windows = desktop::placements();
             if json {
                 let listed: Vec<_> = windows
                     .iter()
@@ -147,9 +148,9 @@ fn main() -> Result<()> {
         }
 
         Command::Focus { title } => {
-            let windows = read::placements();
+            let windows = desktop::placements();
             let window = pick_window(&windows, &title)?;
-            focus_window(window)?;
+            desktop::focus(window)?;
             out!("{}", describe(window));
         }
 

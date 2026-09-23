@@ -4,10 +4,10 @@ use anyhow::{Context, Result};
 
 use crate::capture::{self, Region};
 use crate::cli::Area;
+use crate::desktop;
 use crate::index::{Element, Snapshot};
 use crate::look::{resolve, scan, scan_for, wait, WAIT_TIMEOUT};
 use crate::pointer::{Button, Pointer};
-use crate::read;
 
 pub(crate) fn run(steps: &[String], area: &Area) -> Result<()> {
     let mut pointer = Pointer::new()?;
@@ -68,8 +68,8 @@ pub(crate) fn run(steps: &[String], area: &Area) -> Result<()> {
                 out!("{start}\n{end}");
             }
             "focus" => {
-                let windows = read::placements();
-                focus_window(pick_window(&windows, argument)?)?;
+                let windows = desktop::placements();
+                desktop::focus(pick_window(&windows, argument)?)?;
                 pointer.wait_for_focus();
             }
             "type" => pointer.type_text(argument)?,
@@ -83,7 +83,7 @@ pub(crate) fn run(steps: &[String], area: &Area) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn describe(window: &read::Placement) -> String {
+pub(crate) fn describe(window: &desktop::Placement) -> String {
     let focused = if window.focused { " [focused]" } else { "" };
     format!(
         "{} @{},{} {}x{}{focused}",
@@ -93,9 +93,9 @@ pub(crate) fn describe(window: &read::Placement) -> String {
 
 /// The one window whose title matches: exactly, else containing the text.
 pub(crate) fn pick_window<'a>(
-    windows: &'a [read::Placement],
+    windows: &'a [desktop::Placement],
     title: &str,
-) -> Result<&'a read::Placement> {
+) -> Result<&'a desktop::Placement> {
     if windows.is_empty() {
         anyhow::bail!("this desktop does not report its windows");
     }
@@ -124,26 +124,6 @@ pub(crate) fn pick_window<'a>(
                 .join("\n")
         ),
     }
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn focus_window(window: &read::Placement) -> Result<()> {
-    read::geometry::focus(window)
-}
-
-#[cfg(windows)]
-pub(crate) fn focus_window(window: &read::Placement) -> Result<()> {
-    read::ui::focus(
-        window
-            .handle
-            .as_deref()
-            .context("the window has no handle")?,
-    )
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-pub(crate) fn focus_window(_window: &read::Placement) -> Result<()> {
-    anyhow::bail!("focusing windows is not supported on this platform yet")
 }
 
 pub(crate) fn scroll(pointer: &mut Pointer, direction: &str, amount: u32) -> Result<()> {

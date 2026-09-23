@@ -1,5 +1,5 @@
 //! Keep the invoking terminal out of scans and cached click targets.
-use crate::{capture::Region, index::Element, read::Placement};
+use crate::{capture::Region, desktop::Placement, index::Element};
 
 pub fn filter(elements: &mut Vec<Element>, excluded: &[Region]) {
     elements.retain(|element| {

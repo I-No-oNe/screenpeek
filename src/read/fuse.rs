@@ -1,8 +1,8 @@
 //! Place accessibility labels using window geometry or matching OCR text.
 
 use super::atspi::Window;
-use super::Placement;
 use crate::capture::Region;
+use crate::desktop::Placement;
 use crate::index::{self, Element, Source};
 
 /// How far two matched labels may disagree about the offset, in pixels.

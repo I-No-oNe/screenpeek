@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use crate::capture::{self, Region};
 use crate::cli::Area;
 use crate::index::{self, Element, Snapshot};
-use crate::{caller, daemon, read};
+use crate::{caller, daemon, desktop, read};
 
 /// How long a `wait` step in `run` waits.
 pub(crate) const WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -34,7 +34,7 @@ pub(crate) fn wait(
 }
 
 pub(crate) fn scan(area: &Area) -> Result<Vec<Element>> {
-    let windows = read::placements();
+    let windows = desktop::placements();
     let region = area.region(&windows)?;
     let language = resolve_language(area.lang.as_deref())?;
     let excluded = caller::regions(&windows);
@@ -81,7 +81,7 @@ pub(crate) fn resolve(target: &str, fresh: bool, area: &Area) -> Result<Snapshot
         if let Some(mut snapshot) = Snapshot::load() {
             caller::filter(
                 &mut snapshot.elements,
-                &caller::regions(&read::placements()),
+                &caller::regions(&desktop::placements()),
             );
             if snapshot.can_resolve(target) {
                 return Ok(snapshot);
@@ -152,7 +152,7 @@ fn tree() -> Tree {}
 fn with_tree_text(
     elements: Vec<Element>,
     tree: Tree,
-    placements: &[read::Placement],
+    placements: &[desktop::Placement],
 ) -> Vec<Element> {
     if tree.is_empty() {
         return elements;
@@ -171,7 +171,7 @@ fn with_tree_text(
 fn with_tree_text(
     elements: Vec<Element>,
     _tree: Tree,
-    _placements: &[read::Placement],
+    _placements: &[desktop::Placement],
 ) -> Vec<Element> {
     elements
 }

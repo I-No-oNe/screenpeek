@@ -367,7 +367,7 @@ impl Pointer {
             // with keys reorders them, since keys take the slower portal route.
             if !text.is_ascii() {
                 sleep(KEY_FLUSH);
-                if crate::read::geometry_helper::commit(text) {
+                if crate::desktop::helper::commit(text) {
                     return Ok(());
                 }
                 if let Some(layouts) = kde::Layouts::new() {

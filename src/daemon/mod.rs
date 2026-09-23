@@ -15,9 +15,10 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::capture::{self, Capture, Region};
+use crate::desktop::Placement;
 use crate::index::{self, Element};
 use crate::pointer::Input;
-use crate::read::{Engine, Language, Placement};
+use crate::read::{Engine, Language};
 
 mod client;
 mod diff;
@@ -379,7 +380,7 @@ impl Session {
         if !comparable {
             self.tree.clear();
         }
-        let placements = crate::read::placements();
+        let placements = crate::desktop::placements();
         let edges = crate::read::edges(&placements);
         let recognition = Instant::now();
 

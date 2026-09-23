@@ -1,6 +1,6 @@
 //! GNOME extension and one-shot KWin geometry queries.
 
-use super::geometry::{placement_of, HyprlandClient};
+use super::hyprland::{placement_of, HyprlandClient};
 use super::Placement;
 use anyhow::{Context, Result};
 use std::{io::Write, sync::mpsc, time::Duration};
@@ -9,7 +9,7 @@ use zbus::blocking::{connection::Builder, Proxy};
 const INTERFACE: &str = "org.screenpeek.Windows";
 const PATH: &str = "/org/screenpeek/Windows";
 
-pub fn windows() -> Result<Vec<Placement>> {
+pub(super) fn windows() -> Result<Vec<Placement>> {
     let connection = crate::portal::session()?;
     let listed: String = Proxy::new(&connection, INTERFACE, PATH, INTERFACE)?
         .call("List", &())
@@ -28,7 +28,7 @@ fn missing_helper() -> &'static str {
     }
 }
 
-pub fn focus(handle: &str) -> Result<()> {
+pub(super) fn focus(handle: &str) -> Result<()> {
     let connection = crate::portal::session()?;
     let focused =
         match Proxy::new(&connection, INTERFACE, PATH, INTERFACE)?.call("Focus", &(handle,)) {

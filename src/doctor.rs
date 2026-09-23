@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 
 #[cfg(any(target_os = "linux", windows))]
 use crate::capture;
-use crate::{daemon, read};
+use crate::{daemon, desktop, read};
 
 /// One line per part screenpeek needs: `ok` with what it uses, or `fix` with why.
 pub(crate) fn doctor() {
@@ -59,9 +59,9 @@ fn platform() {
     }
     report(
         "windows",
-        read::geometry::windows().map(|windows| format!("{} visible", windows.len())),
+        desktop::list().map(|windows| format!("{} visible", windows.len())),
     );
-    if read::geometry_helper::outdated_extension() {
+    if desktop::helper::outdated_extension() {
         out!("fix  GNOME extension: an older copy is running; log out and back in to load the new one");
     }
     report(
@@ -87,7 +87,7 @@ fn platform() {
     );
     report(
         "windows",
-        read::ui::windows().map(|windows| format!("{} visible", windows.len())),
+        desktop::list().map(|windows| format!("{} visible", windows.len())),
     );
     report(
         "accessibility",
