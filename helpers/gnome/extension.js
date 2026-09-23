@@ -23,7 +23,7 @@ export default class Screenpeek extends Extension {
         const workspace = global.workspace_manager.get_active_workspace();
         // Fully transparent windows, like the Xwayland video bridge, are not on screen.
         return JSON.stringify(global.get_window_actors()
-            .filter(actor => actor.opacity > 0 && (actor.meta_window.opacity ?? 255) > 0)
+            .filter(actor => actor.opacity > 0 && (actor.meta_window.get_opacity?.() ?? 255) > 0)
             .map(actor => actor.meta_window)
             .filter(window => !window.minimized && window.located_on_workspace(workspace)
                 && [Meta.WindowType.NORMAL, Meta.WindowType.DIALOG].includes(window.get_window_type())

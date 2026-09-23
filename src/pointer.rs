@@ -15,6 +15,9 @@ const FOCUS_DELAY: Duration = Duration::from_millis(120);
 /// Pause between drag movements so applications see a drag, not a jump.
 const DRAG_STEP: Duration = Duration::from_millis(15);
 
+/// Time for keys already sent through the portal to arrive before text is committed.
+const KEY_FLUSH: Duration = Duration::from_millis(60);
+
 /// Time for a new keyboard's keymap to land. Raise if characters go missing.
 const KEYMAP_DELAY: Duration = Duration::from_millis(30);
 
@@ -364,17 +367,15 @@ impl Pointer {
         }
         #[cfg(target_os = "linux")]
         if self.portal.is_some() {
-            let mut rest = text;
-            while let Some(start) = rest.find(|c: char| !c.is_ascii()) {
-                self.type_keys(&rest[..start])?;
-                let run = &rest[start..];
-                let end = run.find(|c: char| c.is_ascii()).unwrap_or(run.len());
-                if !crate::read::geometry_helper::commit(&run[..end]) {
-                    self.type_keys(&run[..end])?;
+            // Text the layout may lack goes whole through GNOME's input method; mixing it
+            // with keys reorders them, since keys take the slower portal route.
+            if !text.is_ascii() {
+                sleep(KEY_FLUSH);
+                if crate::read::geometry_helper::commit(text) {
+                    return Ok(());
                 }
-                rest = &run[end..];
             }
-            return self.type_keys(rest);
+            return self.type_keys(text);
         }
         // Windows takes Unicode text directly.
         if !cfg!(target_os = "linux") {

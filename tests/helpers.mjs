@@ -22,7 +22,7 @@ const context = {Extension: class {}, Main: {activateWindow: window => { activat
         {meta_window: {...visible, minimized: true}, opacity: 255},
         {meta_window: {...visible, located_on_workspace: () => false}, opacity: 255},
         {meta_window: {...visible, get_window_type: () => 1}, opacity: 255},
-        {meta_window: {...visible, opacity: 0}, opacity: 255},
+        {meta_window: {...visible, get_opacity: () => 0}, opacity: 255},
         {meta_window: visible, opacity: 0},
     ],
 }};
