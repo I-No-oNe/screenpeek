@@ -19,11 +19,11 @@ pub struct Remote {
 impl Remote {
     pub fn new() -> Result<Self> {
         let connection = Connection::session()?;
-        // xdg-desktop-portal 1.22 aborts on a CreateSession without a session token.
-        let token = format!("screenpeek{}", std::process::id());
+        // xdg-desktop-portal 1.22 needs a distinct token for every request and session.
+        let handle = |step: &str| Value::from(format!("screenpeek{}_{step}", std::process::id()));
         let options = Options::from([
-            ("handle_token", Value::from(token.as_str())),
-            ("session_handle_token", Value::from(token.as_str())),
+            ("handle_token", handle("create")),
+            ("session_handle_token", handle("session")),
         ]);
         let created = portal::request(&connection, INTERFACE, "CreateSession", &(options,))?;
         let session: String = created
@@ -39,6 +39,7 @@ impl Remote {
         // Persist mode 2 keeps the grant until revoked, so the desktop asks once.
         let token = restore_token();
         let mut devices = Options::from([
+            ("handle_token", handle("devices")),
             ("types", Value::from(3u32)),
             ("persist_mode", Value::from(2u32)),
         ]);
@@ -58,6 +59,7 @@ impl Remote {
             &(
                 &remote.session,
                 Options::from([
+                    ("handle_token", handle("sources")),
                     ("types", Value::from(1u32)),
                     ("multiple", Value::from(true)),
                 ]),
@@ -72,7 +74,11 @@ impl Remote {
             &remote.connection,
             INTERFACE,
             "Start",
-            &(&remote.session, "", Options::new()),
+            &(
+                &remote.session,
+                "",
+                Options::from([("handle_token", handle("start"))]),
+            ),
         )?;
         let devices = u32::try_from(
             started
