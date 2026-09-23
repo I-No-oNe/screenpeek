@@ -85,6 +85,19 @@ fn same_control(pixel: &Element, control: &Element) -> bool {
     if 2 * dx > i64::from(control.width) || 2 * dy > i64::from(control.height) {
         return false;
     }
+    // A named control stands for whatever is drawn on it, such as `AC` on "All clear".
+    const CONTROLS: &[&str] = &[
+        "button", "toggle", "checkbox", "radio", "menuitem", "tab", "switch", "combobox", "link",
+    ];
+    let inside = pixel.width <= control.width && pixel.height <= control.height;
+    if inside
+        && control
+            .role
+            .as_deref()
+            .is_some_and(|role| CONTROLS.contains(&role))
+    {
+        return true;
+    }
     let pixel_text = fold(&pixel.text);
     let tree_text = fold(&control.text);
     !pixel_text.is_empty()
@@ -328,6 +341,36 @@ mod tests {
         assert!(merged
             .iter()
             .any(|e| e.text == "File" && e.x == 20 && e.source == Source::Tree));
+    }
+
+    #[test]
+    fn text_drawn_on_a_named_button_is_not_listed_twice() {
+        let at = |text: &str, x, source, role: Option<&str>| Element {
+            text: text.into(),
+            x,
+            y: 441,
+            width: 190,
+            height: 56,
+            source,
+            role: role.map(String::from),
+            ..Default::default()
+        };
+        let merged = merge_tree(
+            vec![
+                at("AC", 809, Source::Ocr, None),
+                at("Total", 400, Source::Ocr, None),
+            ],
+            vec![
+                at("All clear", 809, Source::Tree, Some("button")),
+                at("Result", 400, Source::Tree, Some("label")),
+            ],
+        );
+        let texts: Vec<_> = merged.iter().map(|e| e.text.as_str()).collect();
+        assert!(!texts.contains(&"AC") && texts.contains(&"All clear"));
+        assert!(
+            texts.contains(&"Total"),
+            "labels keep what OCR read beside them"
+        );
     }
 
     #[test]

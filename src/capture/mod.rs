@@ -1,6 +1,8 @@
 //! Screen capture in virtual-desktop coordinates, the space the pointer uses.
 
 #[cfg(target_os = "linux")]
+pub mod frames;
+#[cfg(target_os = "linux")]
 pub mod portal;
 #[cfg(target_os = "linux")]
 pub mod wayland;
@@ -187,7 +189,7 @@ impl Backend {
                         "portal capture uses the whole desktop; use --region instead of --monitor"
                     );
                 }
-                portal::Portal::new()?.capture()
+                crate::portal::retry(|| portal::Portal::new()?.capture())
             }
         }?;
         match region {

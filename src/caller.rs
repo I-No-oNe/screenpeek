@@ -20,17 +20,9 @@ pub fn regions(windows: &[Placement]) -> Vec<Region> {
             .filter(|window| window.pid == Some(pid))
             .collect();
         if !terminal.is_empty() {
-            // ponytail: only the focused window is known to be in front of the terminal.
-            let front = windows
-                .iter()
-                .find(|window| window.focused && window.pid != Some(pid))
-                .filter(|_| !terminal.iter().any(|window| window.focused));
             return terminal
                 .iter()
-                .flat_map(|window| match front {
-                    Some(front) => minus(window.rect(), front.rect()),
-                    None => vec![window.rect()],
-                })
+                .flat_map(|window| uncovered(window, windows))
                 .collect();
         }
         let Some(parent) = std::fs::read_to_string(format!("/proc/{pid}/stat"))
@@ -45,6 +37,24 @@ pub fn regions(windows: &[Placement]) -> Vec<Region> {
         pid = parent;
     }
     Vec::new()
+}
+
+/// The parts of a terminal window that no window in front of it covers.
+fn uncovered(terminal: &Placement, windows: &[Placement]) -> Vec<Region> {
+    windows
+        .iter()
+        .filter(|window| window.pid != terminal.pid)
+        .filter(|window| match (window.stack, terminal.stack) {
+            (Some(window), Some(terminal)) => window > terminal,
+            // Without stacking order, only the focused window is known to be in front.
+            _ => window.focused && !terminal.focused,
+        })
+        .fold(vec![terminal.rect()], |parts, front| {
+            parts
+                .into_iter()
+                .flat_map(|part| minus(part, front.rect()))
+                .collect()
+        })
 }
 
 /// The parts of `area` outside `hole`, as up to four rectangles.
@@ -116,6 +126,33 @@ mod tests {
         let area: u32 = parts.iter().map(|part| part.width * part.height).sum();
         assert_eq!(area, 100 * 100 - 50 * 70);
         assert_eq!(minus(region(0, 0, 10, 10), region(50, 50, 5, 5)).len(), 1);
+    }
+
+    #[test]
+    fn only_windows_in_front_are_cut_out_of_the_terminal() {
+        let window = |pid, x, stack| Placement {
+            x,
+            width: 100,
+            height: 100,
+            pid: Some(pid),
+            stack,
+            ..Default::default()
+        };
+        let terminal = window(1, 0, Some(1));
+        let behind = window(2, 0, Some(0));
+        let front = window(3, 50, Some(2));
+        let parts = uncovered(&terminal, &[behind, terminal.clone(), front]);
+        assert!(parts.iter().any(|part| part.contains(10, 10)));
+        assert!(!parts.iter().any(|part| part.contains(60, 10)));
+
+        let unordered = window(1, 0, None);
+        let focused = Placement {
+            focused: true,
+            ..window(3, 50, None)
+        };
+        assert!(!uncovered(&unordered, &[focused])
+            .iter()
+            .any(|part| part.contains(60, 10)));
     }
 
     #[test]

@@ -58,6 +58,11 @@ pub fn place(windows: &[Window], placements: &[Placement]) -> Vec<Placed> {
         }
         taken[index] = true;
         let placement = &placements[index];
+        let in_front: Vec<Region> = placements
+            .iter()
+            .filter(|other| matches!((other.stack, placement.stack), (Some(other), Some(this)) if other > this))
+            .map(Placement::rect)
+            .collect();
 
         placed.push(Placed {
             key: Some((window.title.clone(), window.width, window.height)),
@@ -75,6 +80,12 @@ pub fn place(windows: &[Window], placements: &[Placement]) -> Vec<Placed> {
                     source: Source::Tree,
                     role: item.role.map(String::from),
                     states: item.states.iter().map(|state| state.to_string()).collect(),
+                })
+                // Items under a window in front are not visible.
+                .filter(|element| {
+                    !in_front
+                        .iter()
+                        .any(|rect| rect.contains(element.x, element.y))
                 })
                 .collect(),
         });
@@ -196,6 +207,7 @@ mod tests {
             focused: false,
             pid: None,
             handle: None,
+            stack: None,
         }
     }
 
@@ -265,6 +277,27 @@ mod tests {
 
         let fused = fuse(recognized, &[tree]);
         assert_eq!(fused.len(), 3);
+    }
+
+    #[test]
+    fn items_under_a_window_in_front_are_left_out() {
+        let back = Placement {
+            stack: Some(0),
+            ..placement("Calculator", 0, 0)
+        };
+        let front = Placement {
+            stack: Some(1),
+            width: 100,
+            height: 100,
+            ..placement("Welcome", 0, 0)
+        };
+        let calculator = Window {
+            title: "Calculator".into(),
+            ..window(vec![item("Seven", 10, 10), item("Nine", 300, 300)])
+        };
+        let placed = place(&[calculator], &[back, front]);
+        let texts: Vec<_> = placed[0].elements.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, ["Nine"]);
     }
 
     #[test]

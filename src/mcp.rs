@@ -107,7 +107,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "run",
-        description: "Run steps in order, stopping at the first failure: `click T`, `fill T with TEXT`, `type TEXT`, `key COMBO`, `wait T`, `scroll down 3`, `drag A to B`.",
+        description: "Run steps in order, stopping at the first failure: `focus WINDOW`, `click T`, `fill T with TEXT`, `type TEXT`, `key COMBO`, `wait T`, `scroll down 3`, `drag A to B`.",
         params: &[("steps", Kind::Steps, "Steps in order")],
     },
 ];

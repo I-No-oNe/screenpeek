@@ -137,9 +137,9 @@ enum Command {
         combination: String,
     },
 
-    /// Run steps in order: click, fill, type, key, wait, scroll, drag
+    /// Run steps in order: focus, click, fill, type, key, wait, scroll, drag
     Run {
-        /// Steps such as "click Save", "wait Saved", "scroll down 3", "drag A to B"
+        /// Steps such as "focus Firefox", "click Save", "wait Saved", "scroll down 3", "drag A to B"
         #[arg(required = true)]
         steps: Vec<String>,
 
@@ -158,6 +158,10 @@ enum Command {
 
     /// Say whether a daemon is running
     Status,
+
+    /// Check what this desktop supports and what is missing
+    #[cfg(target_os = "linux")]
+    Doctor,
 
     /// Capture once through the desktop portal, for checking GNOME and KDE
     #[cfg(target_os = "linux")]
@@ -377,6 +381,9 @@ fn main() -> Result<()> {
         Command::Status => println!("{}", daemon::endpoint_summary()?),
 
         #[cfg(target_os = "linux")]
+        Command::Doctor => doctor(),
+
+        #[cfg(target_os = "linux")]
         Command::Portal => {
             let started = std::time::Instant::now();
             let capture = capture::portal::Portal::new()?.capture()?;
@@ -429,6 +436,14 @@ fn run(steps: &[String], area: &Area) -> Result<()> {
     let current = |snapshot: &mut Option<Snapshot>, targets: &[&str]| -> Result<Snapshot> {
         match snapshot.take() {
             Some(known) if targets.iter().all(|t| known.can_resolve(t)) => Ok(known),
+            // Ids name elements of the last scan, so that scan still answers them.
+            _ if targets.iter().all(|t| t.parse::<usize>().is_ok()) => {
+                let known = resolve(targets[0], false, area)?;
+                match targets.iter().all(|t| known.can_resolve(t)) {
+                    true => Ok(known),
+                    false => Ok(Snapshot::new(scan(area)?)),
+                }
+            }
             _ => Ok(Snapshot::new(scan(area)?)),
         }
     };
@@ -472,6 +487,11 @@ fn run(steps: &[String], area: &Area) -> Result<()> {
                 pointer.drag((start.x, start.y), (end.x, end.y))?;
                 println!("{start}\n{end}");
             }
+            "focus" => {
+                let windows = read::placements();
+                focus_window(pick_window(&windows, argument)?)?;
+                pointer.wait_for_focus();
+            }
             "type" => pointer.type_text(argument)?,
             "key" => pointer.press(argument)?,
             other => anyhow::bail!("unknown step {other:?} in {step:?}"),
@@ -481,6 +501,78 @@ fn run(steps: &[String], area: &Area) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// One line per part screenpeek needs: `ok` with what it uses, or `fix` with why.
+#[cfg(target_os = "linux")]
+fn doctor() {
+    let report = |part: &str, result: Result<String>| match result {
+        Ok(detail) => println!("ok   {part}: {detail}"),
+        Err(error) => println!("fix  {part}: {error:#}"),
+    };
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".into());
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".into());
+    println!("     desktop: {desktop} on {session}");
+    report(
+        "capture",
+        capture::Backend::new().map(|backend| backend.name().to_owned()),
+    );
+    let portal = std::env::var("SCREENPEEK_INPUT").as_deref() == Ok("portal")
+        || (capture::wayland::Screencopy::new().is_err()
+            && capture::wayland::logical_desktop().is_some());
+    report(
+        "input",
+        Ok(match portal {
+            true => "portal, asks once per desktop".into(),
+            false => "virtual keyboard and pointer".into(),
+        }),
+    );
+    if matches!(capture::Backend::new(), Ok(capture::Backend::Portal)) {
+        report("screen stream", frame_helper());
+    }
+    report(
+        "windows",
+        read::geometry::windows().map(|windows| format!("{} visible", windows.len())),
+    );
+    report(
+        "accessibility",
+        read::atspi::windows()
+            .map(|windows| format!("{} windows describe themselves", windows.len())),
+    );
+    if let Some(codes) = read::language::configured() {
+        report(
+            "languages",
+            read::tesseract::installed()
+                .map(|_| codes)
+                .context("install tesseract with your package manager"),
+        );
+    }
+    report(
+        "daemon",
+        daemon::endpoint_summary().or_else(|_| Ok("starts on the first scan".into())),
+    );
+}
+
+/// Whether the KDE and GNOME frame helper is installed and its libraries load.
+#[cfg(target_os = "linux")]
+fn frame_helper() -> Result<String> {
+    let helper = std::env::current_exe()?.with_file_name("screenpeek-frames");
+    let output = std::process::Command::new(&helper)
+        .arg("--version")
+        .output()
+        .with_context(|| {
+            format!(
+                "{} is missing; scans use slower screenshots",
+                helper.display()
+            )
+        })?;
+    match output.status.success() {
+        true => Ok("PipeWire".into()),
+        false => anyhow::bail!(
+            "{} does not start (install PipeWire's libraries); scans use slower screenshots",
+            helper.display()
+        ),
+    }
 }
 
 fn describe(window: &read::Placement) -> String {

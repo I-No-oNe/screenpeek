@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::capture::{self, Capture, Region};
 use crate::index::{self, Element};
+use crate::pointer::Input;
 use crate::read::{Engine, Language, Placement};
 
 mod diff;
@@ -30,6 +31,12 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a client waits for an answer before reading the screen itself.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Input may wait on the desktop's permission dialog the first time.
+const INPUT_TIMEOUT: Duration = Duration::from_secs(130);
+
+/// How old input must be before a frame is trusted to show it.
+const SETTLE: Duration = Duration::from_millis(120);
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
@@ -45,7 +52,7 @@ fn worker_threads() -> usize {
 
 const BAND_CACHE_SIZE: usize = 32;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Request {
     pub token: String,
     pub region: Option<Region>,
@@ -57,6 +64,9 @@ pub struct Request {
     pub lang: Option<Language>,
     #[serde(default)]
     pub excluded: Vec<Region>,
+    /// Input to perform instead of reading the screen.
+    #[serde(default)]
+    pub input: Option<Input>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -108,12 +118,16 @@ pub fn serve() -> Result<()> {
         let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
         let response = match read_request(&mut stream) {
             Ok(request) if request.token != token => Response::Error("bad token".into()),
-            Ok(request) => {
+            Ok(mut request) => {
                 activity
                     .lock()
                     .expect("activity not poisoned")
                     .record(request.session);
-                match session.look(&request) {
+                let looked = match request.input.take() {
+                    Some(input) => session.act(input).map(|()| Vec::new()),
+                    None => session.look(&request),
+                };
+                match looked {
                     Ok(elements) => Response::Elements { elements },
                     Err(error) => Response::Error(error.to_string()),
                 }
@@ -208,6 +222,16 @@ struct Session {
     tree: TreeCache,
     /// Whether each window's tree accounts for the text in its pixels.
     covered: HashMap<WindowKey, bool>,
+    /// The portal session input and frames share, on KDE and GNOME.
+    #[cfg(target_os = "linux")]
+    desk: Option<crate::pointer::Desk>,
+    #[cfg(target_os = "linux")]
+    frames: Option<capture::frames::Frames>,
+    /// Once the screen stream fails, screenshots are used instead.
+    #[cfg(target_os = "linux")]
+    frames_failed: bool,
+    /// When input was last performed, so frames can wait for it to show.
+    last_input: Option<Instant>,
 }
 
 /// A window as remembered between looks: title and size.
@@ -282,6 +306,10 @@ impl Session {
                 bands: HashMap::new(),
                 tree: HashMap::new(),
                 covered: HashMap::new(),
+                desk: None,
+                frames: None,
+                frames_failed: false,
+                last_input: None,
             })
         }
 
@@ -293,7 +321,29 @@ impl Session {
             bands: HashMap::new(),
             tree: HashMap::new(),
             covered: HashMap::new(),
+            last_input: None,
         })
+    }
+
+    fn act(&mut self, input: Input) -> Result<()> {
+        self.last_input = Some(Instant::now());
+        #[cfg(target_os = "linux")]
+        {
+            let desk = match self.desk.take() {
+                Some(desk) => desk,
+                None => crate::pointer::Desk::open()?,
+            };
+            let (done, desk) = desk.perform(input);
+            self.desk = desk;
+            if done.is_err() {
+                // The session may have been revoked; the next command opens a new one.
+                self.desk = None;
+                self.frames = None;
+            }
+            done
+        }
+        #[cfg(not(target_os = "linux"))]
+        crate::pointer::Pointer::new()?.perform(input)
     }
 
     fn look(&mut self, request: &Request) -> Result<Vec<Element>> {
@@ -560,6 +610,22 @@ impl Session {
     fn capture(&mut self, monitor: Option<usize>, region: Option<Region>) -> Result<Capture> {
         #[cfg(target_os = "linux")]
         {
+            let portal = matches!(self.capturer, capture::Backend::Portal);
+            if portal && monitor.is_none() && !self.frames_failed {
+                match self.frame() {
+                    Ok(full) => {
+                        return match region {
+                            Some(region) => capture::crop(full, region),
+                            None => Ok(full),
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("screenpeek: no screen stream, using screenshots: {error:#}");
+                        self.frames = None;
+                        self.frames_failed = true;
+                    }
+                }
+            }
             self.capturer.capture(monitor, region)
         }
         #[cfg(not(target_os = "linux"))]
@@ -678,6 +744,60 @@ fn context_key(monitor: Option<usize>, origin: (i32, i32), excluded: &[Region]) 
     hasher.finish()
 }
 
+#[cfg(target_os = "linux")]
+impl Session {
+    /// The latest frame of the portal's screen stream.
+    fn frame(&mut self) -> Result<Capture> {
+        if self.frames.is_none() {
+            if self.desk.is_none() {
+                self.desk = Some(crate::pointer::Desk::open()?);
+            }
+            let (remote, screens) = self.desk.as_ref().expect("desk opened").screens()?;
+            self.frames = Some(capture::frames::Frames::start(remote, screens)?);
+        }
+        let settle = self
+            .last_input
+            .map_or(Duration::ZERO, |at| SETTLE.saturating_sub(at.elapsed()));
+        self.frames
+            .as_mut()
+            .expect("frames started")
+            .capture(settle)
+    }
+}
+
+/// Whether commands may go through the daemon.
+pub fn available() -> bool {
+    std::env::var_os("SCREENPEEK_NO_DAEMON").is_none()
+}
+
+/// Have the daemon perform input with its portal session.
+pub fn act(input: Input) -> Result<()> {
+    let mut stream = match connect() {
+        Some(stream) => stream,
+        None => {
+            start().context("cannot start the daemon for input")?;
+            connect().context("cannot reach the daemon for input")?
+        }
+    };
+    let (_, token) = read_endpoint()?;
+    let request = Request {
+        token,
+        session: owning_session(),
+        input: Some(input),
+        ..Default::default()
+    };
+    let mut line = serde_json::to_vec(&request)?;
+    line.push(b'\n');
+    stream.set_read_timeout(Some(INPUT_TIMEOUT))?;
+    stream.write_all(&line)?;
+    let mut reply = String::new();
+    BufReader::new(&stream).read_line(&mut reply)?;
+    match serde_json::from_str(&reply).context("the daemon did not answer the input")? {
+        Response::Elements { .. } => Ok(()),
+        Response::Error(error) => bail!(error),
+    }
+}
+
 /// Ask the daemon, starting it if needed; `None` means read directly.
 pub fn ask(
     region: Option<Region>,
@@ -704,6 +824,7 @@ pub fn ask(
         session: owning_session(),
         lang,
         excluded,
+        input: None,
     };
     let mut line = serde_json::to_vec(&request).ok()?;
     line.push(b'\n');

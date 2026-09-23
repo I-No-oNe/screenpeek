@@ -93,6 +93,13 @@ fn patch_preserves_duplicate_bands_across_cache_eviction() {
         capturer: capture::Backend::Portal,
         tree: HashMap::new(),
         covered: HashMap::new(),
+        #[cfg(target_os = "linux")]
+        desk: None,
+        #[cfg(target_os = "linux")]
+        frames: None,
+        #[cfg(target_os = "linux")]
+        frames_failed: false,
+        last_input: None,
     };
     let bands = [
         Region {
@@ -137,6 +144,13 @@ fn fixture_scan_scenarios() {
         capturer: capture::Backend::Portal,
         tree: HashMap::new(),
         covered: HashMap::new(),
+        #[cfg(target_os = "linux")]
+        desk: None,
+        #[cfg(target_os = "linux")]
+        frames: None,
+        #[cfg(target_os = "linux")]
+        frames_failed: false,
+        last_input: None,
     };
     let request = Request {
         token: String::new(),
@@ -145,6 +159,7 @@ fn fixture_scan_scenarios() {
         session: 0,
         lang: None,
         excluded: Vec::new(),
+        input: None,
     };
     // Place fixture far outside the live desktop so live accessibility cannot cover it.
     let origin = (-10000, -10000);

@@ -21,12 +21,21 @@ read. Windows binaries are on the Releases page.
 
 ```sh
 # Fedora
-sudo dnf install gcc gcc-c++ pkgconf-pkg-config wayland-devel libxkbcommon-devel libXdo-devel
+sudo dnf install gcc gcc-c++ pkgconf-pkg-config wayland-devel libxkbcommon-devel libxdo-devel
 # Debian / Ubuntu
 sudo apt-get install pkg-config libwayland-dev libxkbcommon-dev libxdo-dev
 
 cargo install --path . --locked
 bash scripts/fetch-models.sh     # optional: pick extra languages
+```
+
+On KDE and GNOME, also build the frame helper, which makes scans much faster.
+It is the only part that needs PipeWire:
+
+```sh
+sudo dnf install pipewire-devel clang              # Fedora
+sudo apt-get install libpipewire-0.3-dev clang     # Debian / Ubuntu
+cargo install --path frames --locked
 ```
 
 The OCR models (about 12 MB) download on first use.
@@ -82,9 +91,9 @@ Supported on Hyprland, Sway, X11, GNOME (with the extension) and KDE.
 screenpeek run "click File" "click Save As" "type report.pdf" "key enter" "wait Saved"
 ```
 
-Steps: `click NAME`, `fill NAME with TEXT`, `type TEXT`, `key KEYS`,
-`wait NAME`, `scroll down 3`, `drag A to B`. The run stops at the first step
-that fails.
+Steps: `focus WINDOW`, `click NAME`, `fill NAME with TEXT`, `type TEXT`,
+`key KEYS`, `wait NAME`, `scroll down 3`, `drag A to B`. The run stops at the
+first step that fails.
 
 ## Agents and MCP
 
@@ -116,18 +125,18 @@ To make your agent prefer it, add to `CLAUDE.md` or `AGENTS.md`:
 Install the desktop portal: `xdg-desktop-portal-gnome` or
 `xdg-desktop-portal-kde`.
 
-**GNOME** needs a small extension so screenpeek knows where windows are:
-
-```sh
-sh helpers/gnome/install.sh
-# log out and back in, then:
-gnome-extensions enable screenpeek@screenpeek
-```
+**GNOME** needs a small extension so screenpeek knows where windows are.
+`install.sh` adds it on GNOME; log out and back in once to load it. To add it
+by hand: `sh helpers/gnome/install.sh`.
 
 **KDE** needs nothing extra.
 
-The first click asks you to allow keyboard and mouse control. Your answer is
-remembered; to be asked again, delete `~/.cache/screenpeek/portal-token`.
+The first scan or click asks you to allow screen and input access. Your answer
+is remembered for each desktop; to be asked again, delete
+`~/.cache/screenpeek/portal-token-*`. After that, the background helper keeps
+the screen stream open, so scans read the screen in a few milliseconds.
+
+Run `screenpeek doctor` to see what this desktop supports and what is missing.
 
 ## Browsers
 
@@ -152,6 +161,7 @@ out of scans.
 
 ## Troubleshooting
 
+- **Something does not work:** run `screenpeek doctor`.
 - **Nothing found:** try `--fresh`, check `screenpeek windows`, or narrow with
   `--focused`.
 - **Clicks land in the wrong place after the window moved:** use `--fresh`.

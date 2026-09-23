@@ -213,6 +213,7 @@ pub fn windows() -> Result<Vec<Placement>> {
                     .and_then(|pid| TryInto::<i32>::try_into(pid).ok())
                     .and_then(|pid| u32::try_from(pid).ok()),
                 handle: Some(handle.to_string()),
+                stack: None,
             })
         })
         .collect())

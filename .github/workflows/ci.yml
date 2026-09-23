@@ -13,14 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config dbus
+      # PipeWire and clang build screenpeek-frames, the KDE and GNOME frame helper.
+      - run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config dbus libpipewire-0.3-dev clang
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --locked
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --locked
       - run: node tests/helpers.mjs
       - run: python3 -m doctest bench/compare_tools.py
 
@@ -34,3 +35,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
+
+  gnome:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: >
+          sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config
+          dbus gnome-shell gnome-text-editor xdg-desktop-portal-gnome at-spi2-core libglib2.0-bin
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - run: bash scripts/gnome-ci.sh

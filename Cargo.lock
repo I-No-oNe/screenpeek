@@ -2722,6 +2722,7 @@ dependencies = [
  "rayon",
  "rten",
  "rten-imageproc",
+ "rten-tensor",
  "serde",
  "serde_json",
  "tempfile",
@@ -2733,7 +2734,15 @@ dependencies = [
  "wayland-protocols-wlr",
  "x11rb",
  "xcap",
+ "xkeysym",
  "zbus",
+]
+
+[[package]]
+name = "screenpeek-frames"
+version = "0.0.1-alpha"
+dependencies = [
+ "pipewire",
 ]
 
 [[package]]

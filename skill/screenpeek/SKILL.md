@@ -46,8 +46,9 @@ screenpeek run "click File" "click Save As" "type report.pdf" "key enter" "wait 
 - Use `wait` instead of sleeping while an app loads or a dialog opens.
 - `click --check` warns when nothing near the target changed.
 - Ambiguous names fail and list candidates: click by the listed ID instead.
-- `run` steps: `click T`, `fill T with TEXT`, `type TEXT`, `key COMBO`,
-  `wait T`, `scroll down 3`, `drag A to B`. It stops at the first failure.
+- `run` steps: `focus WINDOW`, `click T`, `fill T with TEXT`, `type TEXT`,
+  `key COMBO`, `wait T`, `scroll down 3`, `drag A to B`. It stops at the
+  first failure. Start with `focus` so the terminal cannot take focus between steps.
 - After acting, verify with `scan --grep` before the next decision.
 - Never guess coordinates for something absent from the scan.
 

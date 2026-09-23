@@ -14,8 +14,18 @@ pub fn windows() -> Result<Vec<Placement>> {
     let listed: String = Proxy::new(&connection, INTERFACE, PATH, INTERFACE)?
         .call("List", &())
         .or_else(|_| kwin(include_str!("../../helpers/kwin/windows.js"), ""))
-        .context("GNOME needs helpers/gnome installed; KDE needs KWin scripting enabled")?;
+        .map_err(|_| anyhow::anyhow!(missing_helper()))?;
     parse(&listed)
+}
+
+/// What to do when neither the GNOME extension nor KWin answers.
+fn missing_helper() -> &'static str {
+    match std::env::var("XDG_CURRENT_DESKTOP") {
+        Ok(desktop) if desktop.contains("GNOME") => {
+            "run `sh helpers/gnome/install.sh`, log in again, then `gnome-extensions enable screenpeek@screenpeek`"
+        }
+        _ => "this desktop does not report window positions (KDE needs KWin scripting enabled)",
+    }
 }
 
 pub fn focus(handle: &str) -> Result<()> {
@@ -25,13 +35,22 @@ pub fn focus(handle: &str) -> Result<()> {
             Ok(focused) => focused,
             Err(_) => {
                 let target = format!("const SCREENPEEK_TARGET = {handle:?};\n");
-                kwin(include_str!("../../helpers/kwin/focus.js"), &target).context(
-                    "GNOME needs helpers/gnome installed; KDE needs KWin scripting enabled",
-                )? == "ok"
+                kwin(include_str!("../../helpers/kwin/focus.js"), &target)
+                    .map_err(|_| anyhow::anyhow!(missing_helper()))?
+                    == "ok"
             }
         };
     anyhow::ensure!(focused, "the window is gone");
     Ok(())
+}
+
+/// Type text through the GNOME extension's input method; false when it cannot.
+pub fn commit(text: &str) -> bool {
+    Connection::session()
+        .and_then(|connection| {
+            Proxy::new(&connection, INTERFACE, PATH, INTERFACE)?.call("Commit", &(text,))
+        })
+        .unwrap_or(false)
 }
 
 fn parse(listed: &str) -> Result<Vec<Placement>> {

@@ -1,0 +1,10 @@
+[package]
+name = "screenpeek-frames"
+version = "0.0.1-alpha"
+edition = "2021"
+description = "PipeWire screen frames for screenpeek on KDE and GNOME"
+license = "MIT"
+publish = false
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pipewire = "0.10"

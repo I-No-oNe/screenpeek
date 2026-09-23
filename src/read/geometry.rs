@@ -175,6 +175,7 @@ fn x11() -> Result<Vec<Placement>> {
             height: geometry.height as u32,
             focused: window == focused,
             handle: Some(window.to_string()),
+            stack: None,
             pid: connection
                 .get_property(false, window, process_id, AtomEnum::CARDINAL, 0, 1)?
                 .reply()?
@@ -264,6 +265,8 @@ pub(super) struct HyprlandClient {
     workspace: HyprlandWorkspace,
     #[serde(default)]
     address: Option<String>,
+    #[serde(default)]
+    stack: Option<u32>,
 }
 
 pub(super) fn placement_of(client: HyprlandClient) -> Option<Placement> {
@@ -279,6 +282,7 @@ pub(super) fn placement_of(client: HyprlandClient) -> Option<Placement> {
         focused: client.focus_history_id == 0,
         pid: client.pid,
         handle: client.address,
+        stack: client.stack,
     })
 }
 
@@ -376,6 +380,7 @@ fn sway_placement(node: &SwayNode) -> Option<Placement> {
         focused: node.focused,
         pid: node.pid,
         handle: node.id.map(|id| id.to_string()),
+        stack: None,
     })
 }
 

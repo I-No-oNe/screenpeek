@@ -161,6 +161,38 @@ impl Remote {
     }
 }
 
+/// One monitor's stream: PipeWire node, logical position and size.
+pub type Screen = (u32, (i32, i32), (u32, u32));
+
+impl Remote {
+    /// The session's PipeWire connection and the monitors it streams.
+    pub fn screens(&self) -> Result<(std::os::fd::OwnedFd, Vec<Screen>)> {
+        let fd: zbus::zvariant::OwnedFd = self
+            .connection
+            .call_method(
+                Some(SERVICE),
+                PATH,
+                Some("org.freedesktop.portal.ScreenCast"),
+                "OpenPipeWireRemote",
+                &(&self.session, Options::new()),
+            )?
+            .body()
+            .deserialize()?;
+        let screens = self
+            .streams
+            .iter()
+            .filter_map(|(node, properties)| {
+                let pair = |key: &str| -> Option<(i32, i32)> {
+                    properties.get(key)?.try_clone().ok()?.try_into().ok()
+                };
+                let (width, height) = pair("logical_size").or_else(|| pair("size"))?;
+                Some((*node, pair("position")?, (width as u32, height as u32)))
+            })
+            .collect();
+        Ok((fd.into(), screens))
+    }
+}
+
 impl Drop for Remote {
     fn drop(&mut self) {
         let _ = self.connection.call_method(
@@ -181,8 +213,15 @@ fn kde() -> bool {
     })
 }
 
+/// One grant per desktop, since each desktop rejects the other's tokens.
 fn token_path() -> Option<std::path::PathBuf> {
-    Some(dirs::cache_dir()?.join("screenpeek").join("portal-token"))
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let name = desktop.split(':').next().unwrap_or_default().to_lowercase();
+    Some(
+        dirs::cache_dir()?
+            .join("screenpeek")
+            .join(format!("portal-token-{name}")),
+    )
 }
 
 fn restore_token() -> Option<String> {
@@ -230,8 +269,8 @@ fn keysym(key: Key) -> Result<i32> {
     Ok(match key {
         Key::Unicode('\n') => 0xff0d,
         Key::Unicode('\t') => 0xff09,
-        Key::Unicode(c) if (c as u32) <= 0xff => c as i32,
-        Key::Unicode(c) => 0x01000000 | c as i32,
+        // Layouts map letters like Hebrew to legacy keysyms, not Unicode ones.
+        Key::Unicode(c) => xkeysym::Keysym::from_char(c).raw() as i32,
         Key::Control => 0xffe3,
         Key::Alt => 0xffe9,
         Key::Shift => 0xffe1,
@@ -288,7 +327,9 @@ mod tests {
         assert_eq!(locate(&streams, -100, 20).unwrap(), (42, 1180.0, 20.0));
         assert!(locate(&streams, 0, 20).is_err());
         assert!(locate(&[(42, Values::new())], 0, 0).is_err());
-        assert_eq!(keysym(Key::Unicode('א')).unwrap(), 0x010005d0);
+        assert_eq!(keysym(Key::Unicode('א')).unwrap(), 0x0ce0);
+        assert_eq!(keysym(Key::Unicode('a')).unwrap(), 0x61);
+        assert_eq!(keysym(Key::Unicode('😀')).unwrap(), 0x0101f600);
         assert_eq!(keysym(Key::Control).unwrap(), 0xffe3);
     }
 }

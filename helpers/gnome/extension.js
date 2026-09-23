@@ -8,6 +8,7 @@ const PATH = '/org/screenpeek/Windows';
 const XML = `<node><interface name="${SERVICE}">
     <method name="List"><arg type="s" direction="out"/></method>
     <method name="Focus"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="Commit"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
 </interface></node>`;
 
 export default class Screenpeek extends Extension {
@@ -20,12 +21,14 @@ export default class Screenpeek extends Extension {
 
     List() {
         const workspace = global.workspace_manager.get_active_workspace();
+        // Fully transparent windows, like the Xwayland video bridge, are not on screen.
         return JSON.stringify(global.get_window_actors()
+            .filter(actor => actor.opacity > 0 && (actor.meta_window.opacity ?? 255) > 0)
             .map(actor => actor.meta_window)
             .filter(window => !window.minimized && window.located_on_workspace(workspace)
                 && [Meta.WindowType.NORMAL, Meta.WindowType.DIALOG].includes(window.get_window_type())
                 && window.showing_on_its_workspace())
-            .map(window => {
+            .map((window, stack) => {
                 // Newer Mutter exposes the exact AT-SPI origin; older versions use the client rect.
                 const rect = window.get_client_content_rect?.()
                     ?? window.frame_rect_to_client_rect(window.get_frame_rect());
@@ -37,6 +40,7 @@ export default class Screenpeek extends Extension {
                     focusHistoryID: window.has_focus() ? 0 : 1,
                     pid: window.get_pid() || null,
                     address: String(window.get_id()),
+                    stack,
                 };
             }));
     }
@@ -47,6 +51,13 @@ export default class Screenpeek extends Extension {
             .find(window => String(window.get_id()) === id);
         if (!window) return false;
         Main.activateWindow(window);
+        return true;
+    }
+
+    // Types text the current layout has no keys for, as the on-screen keyboard does.
+    Commit(text) {
+        if (!Main.inputMethod.currentFocus) return false;
+        Main.inputMethod.commit(text);
         return true;
     }
 

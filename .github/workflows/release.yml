@@ -28,16 +28,21 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config libpipewire-0.3-dev clang
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --locked --release --target ${{ matrix.target }}
 
+      # The frame helper links libpipewire, so it is its own binary and Linux only.
+      - name: Build the frame helper (Linux)
+        if: runner.os == 'Linux'
+        run: cargo build --locked --release --target ${{ matrix.target }} -p screenpeek-frames
+
       - name: Package (Linux)
         if: runner.os == 'Linux'
-        run: tar -czf ${{ matrix.archive }} -C target/${{ matrix.target }}/release screenpeek
+        run: tar -czf ${{ matrix.archive }} -C target/${{ matrix.target }}/release screenpeek screenpeek-frames
 
       - name: Package (Windows)
         if: runner.os == 'Windows'

@@ -59,10 +59,36 @@ pub fn request<B: Serialize + DynamicType>(
         bail!("portal request timed out after 120 seconds");
     }
     let (status, values) = response.context("portal closed without answering")??;
+    if status == 2 {
+        return Err(Failed.into());
+    }
     if status != 0 {
         bail!("portal request was cancelled or denied (status {status})");
     }
     Ok(values)
+}
+
+/// A request the portal failed without asking anyone (status 2).
+#[derive(Debug)]
+pub struct Failed;
+
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("portal request failed (status 2)")
+    }
+}
+
+impl std::error::Error for Failed {}
+
+/// Try once more after a failure, which a portal backend still starting up gives.
+pub fn retry<T>(mut attempt: impl FnMut() -> Result<T>) -> Result<T> {
+    attempt().or_else(|error| {
+        if !error.is::<Failed>() {
+            return Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        attempt()
+    })
 }
 
 #[cfg(test)]
@@ -71,6 +97,22 @@ mod tests {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     use zbus::blocking::connection::Builder;
+
+    #[test]
+    fn only_a_failed_request_is_tried_again() {
+        let mut calls = 0;
+        let result: Result<()> = retry(|| {
+            calls += 1;
+            Err(Failed.into())
+        });
+        assert!(result.is_err() && calls == 2);
+        calls = 0;
+        let result: Result<()> = retry(|| {
+            calls += 1;
+            bail!("denied")
+        });
+        assert!(result.is_err() && calls == 1);
+    }
 
     struct Bus(std::process::Child);
     impl Drop for Bus {

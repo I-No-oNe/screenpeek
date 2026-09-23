@@ -7,7 +7,7 @@ pub mod fuse;
 #[cfg(target_os = "linux")]
 pub mod geometry;
 #[cfg(target_os = "linux")]
-mod geometry_helper;
+pub mod geometry_helper;
 pub mod language;
 pub mod tesseract;
 #[cfg(windows)]
@@ -42,6 +42,8 @@ pub struct Placement {
     pub pid: Option<u32>,
     /// The compositor's own name for the window, used to focus it.
     pub handle: Option<String>,
+    /// Position from the back, when the desktop reports stacking order.
+    pub stack: Option<u32>,
 }
 
 impl Placement {
@@ -215,7 +217,6 @@ impl Engine {
             .map_err(|err| anyhow!("cannot prepare the captured image: {err}"))?;
 
         let words = self
-            .inner
             .detect_words(&input)
             .map_err(|err| anyhow!("text detection failed: {err}"))?;
         // Edges arrive in desktop coordinates; convert to image pixels.
@@ -355,6 +356,34 @@ impl Engine {
             texts[i] = Some(text);
         }
         Ok(texts.into_iter().map(Option::unwrap_or_default).collect())
+    }
+}
+
+/// Smallest word box kept; ocrs's own 100 drops lone digits like a calculator's `9`.
+const MIN_WORD_AREA: f32 = 40.;
+
+impl Engine {
+    /// ocrs's word finder with a smaller minimum area.
+    fn detect_words(&self, input: &ocrs::OcrInput) -> anyhow::Result<Vec<RotatedRect>> {
+        use rten_imageproc::{find_contours, min_area_rect, simplify_polygon, RetrievalMode};
+        use rten_tensor::prelude::*;
+        let threshold = self.inner.detection_threshold();
+        let mask = self
+            .inner
+            .detect_text_pixels(input)?
+            .map(|p| *p > threshold);
+        Ok(find_contours(mask.view(), RetrievalMode::External)
+            .iter()
+            .filter_map(|poly| {
+                let points: Vec<_> = poly.iter().map(|p| p.to_f32()).collect();
+                // Same shape cleanup and 3 px growth as ocrs.
+                min_area_rect(&simplify_polygon(&points, 2.)).map(|mut rect| {
+                    rect.resize(rect.width() + 6., rect.height() + 6.);
+                    rect
+                })
+            })
+            .filter(|rect| rect.area() >= MIN_WORD_AREA)
+            .collect())
     }
 }
 

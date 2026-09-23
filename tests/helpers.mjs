@@ -12,19 +12,31 @@ const visible = {
 };
 const source = read('helpers/gnome/extension.js').replace(/^import .*;$/gm, '')
     .replace('export default class Screenpeek', 'globalThis.Screenpeek = class Screenpeek');
-let activated;
-const context = {Extension: class {}, Main: {activateWindow: window => { activated = window; }}, Meta: {WindowType: {NORMAL: 0, DIALOG: 4, DESKTOP: 1}}, global: {
+let activated, committed;
+const inputMethod = {currentFocus: null, commit: text => { committed = text; }};
+const context = {Extension: class {}, Main: {activateWindow: window => { activated = window; }, inputMethod}, Meta: {WindowType: {NORMAL: 0, DIALOG: 4, DESKTOP: 1}}, global: {
     workspace_manager: {get_active_workspace: () => ({})},
-    get_window_actors: () => [visible, {...visible, minimized: true},
-        {...visible, located_on_workspace: () => false},
-        {...visible, get_window_type: () => 1}].map(meta_window => ({meta_window})),
+    get_window_actors: () => [
+        {meta_window: {...visible, get_id: () => 3}, opacity: 255},
+        {meta_window: visible, opacity: 255},
+        {meta_window: {...visible, minimized: true}, opacity: 255},
+        {meta_window: {...visible, located_on_workspace: () => false}, opacity: 255},
+        {meta_window: {...visible, get_window_type: () => 1}, opacity: 255},
+        {meta_window: {...visible, opacity: 0}, opacity: 255},
+        {meta_window: visible, opacity: 0},
+    ],
 }};
 vm.runInNewContext(source, context);
 let windows = JSON.parse(new context.Screenpeek().List());
-assert.equal(windows.length, 1);
-assert.deepEqual(windows[0].at, [-800, 20]);
-assert.equal(windows[0].pid, 42);
-assert.equal(windows[0].address, '7');
+assert.equal(windows.length, 2, 'hidden and fully transparent windows are left out');
+assert.deepEqual(windows[1].at, [-800, 20]);
+assert.equal(windows[1].pid, 42);
+assert.equal(windows[1].address, '7');
+assert.ok(windows[1].stack > windows[0].stack, 'actors are listed back to front');
+assert.equal(new context.Screenpeek().Commit('שלום'), false, 'no text field has focus');
+inputMethod.currentFocus = {};
+assert.equal(new context.Screenpeek().Commit('שלום'), true);
+assert.equal(committed, 'שלום');
 assert.equal(new context.Screenpeek().Focus('7'), true);
 assert.equal(activated, visible);
 assert.equal(new context.Screenpeek().Focus('8'), false);
@@ -32,23 +44,25 @@ visible.get_client_content_rect = undefined;
 visible.get_frame_rect = () => rect;
 visible.frame_rect_to_client_rect = frame => ({...frame, y: frame.y + 24});
 windows = JSON.parse(new context.Screenpeek().List());
-assert.deepEqual(windows[0].at, [-800, 44]);
+assert.deepEqual(windows[1].at, [-800, 44]);
 
 const active = {minimized: false, deleted: false, desktops: [1], activities: [], internalId: {toString: () => '{abc}'},
-    caption: 'Editor', clientGeometry: rect, pid: 42};
+    caption: 'Editor', clientGeometry: rect, pid: 42, opacity: 1};
 let callback;
 vm.runInNewContext(read('helpers/kwin/windows.js'), {
     SCREENPEEK_CALLBACK: ':1.123',
     workspace: {currentDesktop: 1, currentActivity: 'work', activeWindow: active,
-        windowList: () => [active, {...active, desktops: [2]}, {...active, minimized: true},
-            {...active, activities: ['other']}, {...active, specialWindow: true}]},
+        stackingOrder: [{...active, caption: 'Below'}, active, {...active, desktops: [2]},
+            {...active, minimized: true}, {...active, activities: ['other']},
+            {...active, specialWindow: true}, {...active, opacity: 0}]},
     callDBus: (...args) => { callback = args; },
 });
 assert.deepEqual(callback.slice(0, 4), [':1.123', '/org/screenpeek/Windows', 'org.screenpeek.Windows', 'Reply']);
 windows = JSON.parse(callback[4]);
-assert.equal(windows.length, 1);
-assert.deepEqual(windows[0].at, [-800, 20]);
-assert.equal(windows[0].focusHistoryID, 0);
+assert.equal(windows.length, 2);
+assert.deepEqual(windows[1].at, [-800, 20]);
+assert.equal(windows[1].focusHistoryID, 0);
+assert.ok(windows[1].stack > windows[0].stack, 'KWin stacking order is kept');
 
 let focusedReply;
 const focusContext = {

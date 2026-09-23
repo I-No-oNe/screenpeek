@@ -1,9 +1,9 @@
 // Screenpeek substitutes the callback bus name before loading this one-shot script.
-const windows = workspace.windowList()
-    .filter(window => !window.minimized && !window.deleted && !window.specialWindow
+const windows = workspace.stackingOrder
+    .filter(window => !window.minimized && !window.deleted && !window.specialWindow && window.opacity > 0
         && (window.onAllDesktops || window.desktops.includes(workspace.currentDesktop))
         && (window.activities.length === 0 || window.activities.includes(workspace.currentActivity)))
-    .map(window => {
+    .map((window, stack) => {
         const rect = window.clientGeometry;
         return {
             title: window.caption,
@@ -13,6 +13,7 @@ const windows = workspace.windowList()
             focusHistoryID: window === workspace.activeWindow ? 0 : 1,
             pid: window.pid || null,
             address: window.internalId.toString(),
+            stack,
         };
     });
 callDBus(SCREENPEEK_CALLBACK, '/org/screenpeek/Windows',

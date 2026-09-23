@@ -18,7 +18,7 @@ const DRAG_STEP: Duration = Duration::from_millis(15);
 /// Time for a new keyboard's keymap to land. Raise if characters go missing.
 const KEYMAP_DELAY: Duration = Duration::from_millis(30);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Button {
     Left,
     Right,
@@ -111,11 +111,51 @@ fn named(key: &str) -> Result<Key> {
 
 #[cfg(target_os = "linux")]
 mod portal;
+#[cfg(target_os = "linux")]
+pub use portal::Screen;
+
+/// Input the daemon performs with its portal session, so each command need not open one.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub enum Input {
+    Move(i32, i32),
+    Button(Button, bool, bool),
+    Scroll(i32, bool),
+    Press(String),
+    Type(String),
+}
+
+/// The portal session the daemon keeps for input and screen frames.
+#[cfg(target_os = "linux")]
+pub struct Desk(portal::Remote);
+
+#[cfg(target_os = "linux")]
+impl Desk {
+    pub fn open() -> Result<Desk> {
+        crate::portal::retry(portal::Remote::new).map(Desk)
+    }
+
+    /// The session's PipeWire connection and the monitors it streams.
+    pub fn screens(&self) -> Result<(std::os::fd::OwnedFd, Vec<Screen>)> {
+        self.0.screens()
+    }
+
+    pub fn perform(self, input: Input) -> (Result<()>, Option<Desk>) {
+        let mut pointer = Pointer {
+            enigo: None,
+            portal: Some(self.0),
+            daemon: false,
+        };
+        let done = pointer.perform(input);
+        (done, pointer.portal.map(Desk))
+    }
+}
 
 pub struct Pointer {
     enigo: Option<Enigo>,
     #[cfg(target_os = "linux")]
     portal: Option<portal::Remote>,
+    /// Hand input to the daemon, which keeps a portal session open.
+    daemon: bool,
 }
 
 fn new_enigo() -> Result<Enigo> {
@@ -139,19 +179,55 @@ impl Pointer {
             || (crate::capture::wayland::Screencopy::new().is_err()
                 && crate::capture::wayland::logical_desktop().is_some())
         {
-            return Ok(Pointer {
-                enigo: None,
-                portal: Some(portal::Remote::new()?),
-            });
+            if crate::daemon::available() {
+                return Ok(Pointer {
+                    enigo: None,
+                    portal: None,
+                    daemon: true,
+                });
+            }
+            return Self::local_portal();
         }
         Ok(Pointer {
             enigo: Some(new_enigo()?),
             #[cfg(target_os = "linux")]
             portal: None,
+            daemon: false,
         })
     }
 
+    /// A portal session owned by this process.
+    #[cfg(target_os = "linux")]
+    fn local_portal() -> Result<Pointer> {
+        Ok(Pointer {
+            enigo: None,
+            portal: Some(Desk::open()?.0),
+            daemon: false,
+        })
+    }
+
+    /// Perform input sent by a client.
+    pub fn perform(&mut self, input: Input) -> Result<()> {
+        match input {
+            Input::Move(x, y) => self.move_to(x, y),
+            Input::Button(button, press, release) => self.button(
+                button,
+                match (press, release) {
+                    (true, true) => Direction::Click,
+                    (true, false) => Direction::Press,
+                    _ => Direction::Release,
+                },
+            ),
+            Input::Scroll(steps, horizontal) => self.scroll(steps, horizontal),
+            Input::Press(keys) => self.press(&keys),
+            Input::Type(text) => self.type_text(&text),
+        }
+    }
+
     pub fn move_to(&mut self, x: i32, y: i32) -> Result<()> {
+        if self.daemon {
+            return crate::daemon::act(Input::Move(x, y));
+        }
         #[cfg(target_os = "linux")]
         if let Some(portal) = &self.portal {
             return portal.move_to(x, y);
@@ -162,6 +238,11 @@ impl Pointer {
     }
 
     pub fn button(&mut self, button: Button, direction: Direction) -> Result<()> {
+        if self.daemon {
+            let press = direction != Direction::Release;
+            let release = direction != Direction::Press;
+            return crate::daemon::act(Input::Button(button, press, release));
+        }
         #[cfg(target_os = "linux")]
         if let Some(portal) = &self.portal {
             if direction != Direction::Release {
@@ -187,6 +268,9 @@ impl Pointer {
 
     /// Scroll by whole steps at the pointer; positive is down or right.
     pub fn scroll(&mut self, steps: i32, horizontal: bool) -> Result<()> {
+        if self.daemon {
+            return crate::daemon::act(Input::Scroll(steps, horizontal));
+        }
         #[cfg(target_os = "linux")]
         if let Some(portal) = &self.portal {
             return portal.scroll(steps, horizontal);
@@ -221,6 +305,9 @@ impl Pointer {
     }
 
     pub fn press(&mut self, combination: &str) -> Result<()> {
+        if self.daemon {
+            return crate::daemon::act(Input::Press(combination.to_owned()));
+        }
         let mut parts: Vec<&str> = combination.split('+').map(str::trim).collect();
         let key = parts.pop().context("no key given")?;
         let modifiers: Vec<Key> = parts
@@ -272,21 +359,22 @@ impl Pointer {
     /// A reused virtual keyboard drops characters that need Shift or a keymap
     /// change, so those get a fresh keyboard each; plain keys reuse one.
     pub fn type_text(&mut self, text: &str) -> Result<()> {
+        if self.daemon {
+            return crate::daemon::act(Input::Type(text.to_owned()));
+        }
         #[cfg(target_os = "linux")]
         if self.portal.is_some() {
-            for character in text.chars() {
-                // The KDE portal applies a keysym's Shift one key late, so hold it here.
-                let shifted = character.is_ascii_graphic() && !plain(character);
-                if shifted {
-                    self.key(Key::Shift, Direction::Press)?;
+            let mut rest = text;
+            while let Some(start) = rest.find(|c: char| !c.is_ascii()) {
+                self.type_keys(&rest[..start])?;
+                let run = &rest[start..];
+                let end = run.find(|c: char| c.is_ascii()).unwrap_or(run.len());
+                if !crate::read::geometry_helper::commit(&run[..end]) {
+                    self.type_keys(&run[..end])?;
                 }
-                let typed = self.key(Key::Unicode(character), Direction::Click);
-                if shifted {
-                    self.key(Key::Shift, Direction::Release)?;
-                }
-                typed?;
+                rest = &run[end..];
             }
-            return Ok(());
+            return self.type_keys(rest);
         }
         // Windows takes Unicode text directly.
         if !cfg!(target_os = "linux") {
@@ -306,6 +394,24 @@ impl Pointer {
             if !reuse {
                 self.enigo = None;
             }
+        }
+        Ok(())
+    }
+
+    /// Type through the portal one key at a time.
+    #[cfg(target_os = "linux")]
+    fn type_keys(&mut self, text: &str) -> Result<()> {
+        for character in text.chars() {
+            // The KDE portal applies a keysym's Shift one key late, so hold it here.
+            let shifted = character.is_ascii_graphic() && !plain(character);
+            if shifted {
+                self.key(Key::Shift, Direction::Press)?;
+            }
+            let typed = self.key(Key::Unicode(character), Direction::Click);
+            if shifted {
+                self.key(Key::Shift, Direction::Release)?;
+            }
+            typed?;
         }
         Ok(())
     }
