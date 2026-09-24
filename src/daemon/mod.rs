@@ -106,18 +106,29 @@ pub fn serve() -> Result<()> {
     let activity = Arc::new(Mutex::new(Activity::new()));
     idle_shutdown(Arc::clone(&activity), port);
 
-    for stream in listener.incoming() {
-        let mut stream = match stream {
-            Ok(stream) => stream,
-            Err(error) => {
-                eprintln!("screenpeek: dropped connection: {error}");
-                continue;
-            }
-        };
+    // Requests are read on their own threads, so a client that connects and
+    // says nothing stalls no one; they are then served one at a time.
+    let (sender, requests) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = match stream {
+                Ok(stream) => stream,
+                Err(error) => {
+                    eprintln!("screenpeek: dropped connection: {error}");
+                    continue;
+                }
+            };
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
+                let request = read_request(&mut stream);
+                let _ = sender.send((stream, request));
+            });
+        }
+    });
 
-        // A client that connects and says nothing must not stall the others.
-        let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
-        let response = match read_request(&mut stream) {
+    for (mut stream, request) in requests {
+        let response = match request {
             Ok(request) if request.token != token => Response::Error("bad token".into()),
             Ok(mut request) => {
                 activity
