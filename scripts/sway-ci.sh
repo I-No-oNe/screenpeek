@@ -72,6 +72,12 @@ for line in open(sys.argv[1], errors="replace"):
         pressed = False
 print(f"click landed at {clicked}, typed {typed[:40]!r}... ({len(typed)} characters)")
 assert clicked and abs(clicked[0] - 283) <= 1 and abs(clicked[1] - 649) <= 1, "click missed 283,649"
-assert "about:config" + sys.argv[2] in typed, "typed text lost characters"
+want = "about:config" + sys.argv[2]
+if want not in typed:
+    at = next((i for i, (a, b) in enumerate(zip(want, typed)) if a != b), min(len(want), len(typed)))
+    print(f"typed {len(typed)} of {len(want)}; first difference at {at}:")
+    print(f"  wanted {want[max(0, at - 20):at + 40]!r}")
+    print(f"  got    {typed[max(0, at - 20):at + 40]!r}")
+    raise SystemExit(1)
 PY
 echo "all Sway checks passed"

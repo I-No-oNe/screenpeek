@@ -9,7 +9,8 @@ screenpeek=${SCREENPEEK:-$root/target/release/screenpeek}
 
 if [ "${1-}" != "--inside" ]; then
   work=$(mktemp -d)
-  trap 'fusermount -u "$work/run/doc" 2>/dev/null; rm -rf "$work"' EXIT
+  # Services may still be writing as they stop; leftovers must not fail the run.
+  trap 'fusermount -u "$work/run/doc" 2>/dev/null; rm -rf "$work" 2>/dev/null || true' EXIT
   mkdir -m 700 "$work/run"
   # Its own session bus and folders, so the desktop running this is untouched.
   XDG_CONFIG_HOME=$work/config XDG_DATA_HOME=$work/data XDG_CACHE_HOME=$work/cache \
