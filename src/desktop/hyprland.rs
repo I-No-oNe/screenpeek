@@ -30,16 +30,22 @@ pub(super) fn windows(socket: &Path) -> Result<Vec<Placement>> {
     // Skip hidden workspaces before placing trees or excluding the caller.
     let monitors: Vec<HyprlandMonitor> =
         serde_json::from_str(&ask(socket, "j/monitors")?).unwrap_or_default();
-    let shown: Vec<i32> = monitors
-        .iter()
-        .map(|monitor| monitor.active_workspace.id)
-        .collect();
+    let shown = shown_workspaces(&monitors);
 
     Ok(clients
         .into_iter()
         .filter(|client| shown.is_empty() || shown.contains(&client.workspace.id))
         .filter_map(placement_of)
         .collect())
+}
+
+/// Each monitor's workspace, plus the special one (scratchpad) it shows on top.
+fn shown_workspaces(monitors: &[HyprlandMonitor]) -> Vec<i32> {
+    monitors
+        .iter()
+        .flat_map(|monitor| [monitor.active_workspace.id, monitor.special_workspace.id])
+        .filter(|id| *id != 0)
+        .collect()
 }
 
 fn ask(socket: &Path, request: &str) -> Result<String> {
@@ -64,6 +70,9 @@ pub(super) fn socket() -> Result<PathBuf> {
 struct HyprlandMonitor {
     #[serde(rename = "activeWorkspace", default)]
     active_workspace: HyprlandWorkspace,
+    /// Id 0 when no special workspace is open.
+    #[serde(rename = "specialWorkspace", default)]
+    special_workspace: HyprlandWorkspace,
 }
 
 #[derive(Default, Deserialize)]
@@ -127,5 +136,17 @@ mod tests {
         assert!(placements[0].focused);
         assert_eq!(placements[0].pid, Some(1234));
         assert!(!placements[1].focused);
+    }
+
+    #[test]
+    fn an_open_scratchpad_counts_as_shown() {
+        let monitors: Vec<HyprlandMonitor> = serde_json::from_str(
+            r#"[
+                {"activeWorkspace":{"id":1},"specialWorkspace":{"id":-98}},
+                {"activeWorkspace":{"id":2},"specialWorkspace":{"id":0}}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(shown_workspaces(&monitors), [1, -98, 2]);
     }
 }

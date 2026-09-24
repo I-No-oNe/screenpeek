@@ -7,6 +7,7 @@ from pathlib import Path
 import statistics
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -104,6 +105,7 @@ def main():
     parser.add_argument("--lang", help="Tesseract language code, e.g. eng, heb, jpn")
     parser.add_argument("--runs", type=int, default=7)
     parser.add_argument("--max-ms", type=float, help="fail when a median exceeds this local budget")
+    parser.add_argument("--require-languages", action="store_true", help="with --all, fail instead of skipping fixtures whose language is not installed")
     args = parser.parse_args()
     if args.runs < 3:
         parser.error("use at least 3 measured runs")
@@ -111,11 +113,16 @@ def main():
     if args.mode == "ocr":
         fixtures = sorted((ROOT / "bench/fixtures").glob("*.json")) if args.all else [args.fixture]
         report = {}
+        installed = set(run([binary, "languages"])[1].split()) if args.all else set()
         for fixture in fixtures:
             language = args.lang
             if args.all:
                 manifest = json.loads(fixture.read_text())
                 language = manifest.get("language") if fixture.stem != "dialog" else None
+                missing = set((language or "").split("+")) - installed - {""}
+                if missing and not args.require_languages:
+                    print(f"skipping {fixture.stem}: {' '.join(sorted(missing))} not installed", file=sys.stderr)
+                    continue
                 fixture = fixture.parent / manifest["image"]
             report[fixture.stem] = measure_fixture(binary, fixture, language, args.scale, args.runs)
     else:
@@ -138,7 +145,7 @@ def main():
                 daemon = subprocess.Popen([binary, "serve"], env=env, stdout=subprocess.DEVNULL, stderr=log)
                 try:
                     deadline = time.monotonic() + 30
-                    while not (local / "daemon-v2").exists():
+                    while not (local / "daemon-v3").exists():
                         if daemon.poll() is not None or time.monotonic() >= deadline:
                             raise RuntimeError("benchmark daemon did not start")
                         time.sleep(.05)

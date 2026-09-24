@@ -180,6 +180,7 @@ pub(crate) enum Command {
     /// Click an element and type into it
     Fill {
         target: String,
+        #[arg(allow_hyphen_values = true)]
         text: String,
 
         /// Scan again instead of using the last scan
