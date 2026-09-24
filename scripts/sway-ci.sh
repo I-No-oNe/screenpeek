@@ -35,7 +35,8 @@ wait_for 30 sh -c "ls '$work' | grep -q '^wayland-[0-9]*\$'" || { cat "$work/swa
 export WAYLAND_DISPLAY=$(ls "$work" | grep '^wayland-[0-9]*$' | head -1)
 export SWAYSOCK=$(ls "$work"/sway-ipc.*.sock)
 
-wev >"$log" 2>&1 &
+# Line-buffered: a file gets block-buffered output, which hides the last events.
+stdbuf -oL wev >"$log" 2>&1 &
 # Fullscreen at 1.25 makes wev's surface the whole 1536x864 logical output,
 # so the positions it reports are desktop positions.
 wait_for 30 sh -c "swaymsg -t get_tree | grep -q '\"width\": 1536'" || fail "wev did not open fullscreen"
