@@ -92,9 +92,12 @@ pub fn logical_desktop() -> Option<(i32, i32, u32, u32)> {
         .map(|entry| manager.get_xdg_output(&entry.output, &handle, entry.output.clone()))
         .collect();
     queue.roundtrip(&mut state).ok()?;
+    bounds(&state.outputs)
+}
 
-    let placed: Vec<_> = state
-        .outputs
+/// The rectangle around every output's logical position and size.
+fn bounds(outputs: &[Output]) -> Option<(i32, i32, u32, u32)> {
+    let placed: Vec<_> = outputs
         .iter()
         .filter_map(|output| {
             let (x, y) = output.logical_position.unwrap_or((output.x, output.y));
@@ -158,6 +161,11 @@ impl Screencopy {
             buffer: None,
             _logical_outputs: logical_outputs,
         })
+    }
+
+    /// The logical desktop, from what connecting already learned.
+    pub fn logical_desktop(&self) -> Option<(i32, i32, u32, u32)> {
+        bounds(&self.state.outputs)
     }
 
     pub fn capture(&mut self, monitor: Option<usize>) -> Result<Capture> {
