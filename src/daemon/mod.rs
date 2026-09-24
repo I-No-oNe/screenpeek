@@ -53,6 +53,10 @@ fn worker_threads() -> usize {
 
 const BAND_CACHE_SIZE: usize = 32;
 
+/// Scan areas remembered at once: whole screen, focused window and one more,
+/// so switching between them still compares against the last look.
+const FRAMES_KEPT: usize = 3;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Request {
     pub token: String,
@@ -240,7 +244,8 @@ struct Session {
     how: &'static str,
     #[cfg(target_os = "linux")]
     capturer: capture::Backend,
-    previous: Option<Frame>,
+    /// Recent frames, one per scan area, oldest first.
+    frames_seen: Vec<Frame>,
     bands: HashMap<u64, Vec<Element>>,
     tree: TreeCache,
     /// Whether each window's tree accounts for the text in its pixels.
@@ -328,7 +333,7 @@ impl Session {
                 engine: Engine::load()?,
                 how,
                 capturer,
-                previous: None,
+                frames_seen: Vec::new(),
                 bands: HashMap::new(),
                 tree: HashMap::new(),
                 covered: HashMap::new(),
@@ -344,7 +349,7 @@ impl Session {
         Ok(Session {
             engine: Engine::load()?,
             how: "portable capture",
-            previous: None,
+            frames_seen: Vec::new(),
             bands: HashMap::new(),
             tree: HashMap::new(),
             covered: HashMap::new(),
@@ -385,20 +390,25 @@ impl Session {
     ) -> Result<Vec<Element>> {
         capture.exclude(&request.excluded);
         let key = context_key(request.monitor, capture.origin, &request.excluded);
-        let comparable = self
-            .previous
-            .as_ref()
-            .filter(|frame| frame.key == key)
-            .filter(|frame| frame.lang == request.lang)
-            .filter(|frame| frame.image.dimensions() == capture.image.dimensions())
-            .is_some();
+        let previous = self
+            .frames_seen
+            .iter()
+            .position(|frame| {
+                frame.key == key
+                    && frame.lang == request.lang
+                    && frame.image.dimensions() == capture.image.dimensions()
+            })
+            .map(|index| self.frames_seen.remove(index));
+        let comparable = previous.is_some();
 
-        let changed = match (comparable, self.previous.as_ref()) {
-            (true, Some(frame)) => dirty_areas(&frame.image, &capture.image),
-            _ => Vec::new(),
+        let changed = match &previous {
+            Some(frame) => dirty_areas(&frame.image, &capture.image),
+            None => Vec::new(),
         };
         if comparable && changed.is_empty() {
-            let elements = self.previous.as_ref().unwrap().elements.clone();
+            let frame = previous.expect("comparable");
+            let elements = frame.elements.clone();
+            self.frames_seen.push(frame);
             eprintln!(
                 "unchanged: {} elements, capture {}ms, read 0ms",
                 elements.len(),
@@ -444,7 +454,7 @@ impl Session {
         let (pixels, what) = if let Some(pixels) = read_ahead {
             (pixels, "full")
         } else {
-            match comparable.then_some(self.previous.as_ref()).flatten() {
+            match &previous {
                 None => (self.read_all(&capture, &edges, language)?, "full"),
                 Some(frame) => {
                     // Merge bands to avoid repeated detector startup costs.
@@ -506,7 +516,10 @@ impl Session {
             recognition.elapsed().as_millis()
         );
 
-        self.previous = Some(Frame {
+        if self.frames_seen.len() >= FRAMES_KEPT {
+            self.frames_seen.remove(0);
+        }
+        self.frames_seen.push(Frame {
             key,
             image: capture.image,
             pixels,

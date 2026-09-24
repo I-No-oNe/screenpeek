@@ -87,7 +87,7 @@ fn patch_preserves_duplicate_bands_across_cache_eviction() {
     let mut session = Session {
         engine,
         how: "fixture",
-        previous: None,
+        frames_seen: Vec::new(),
         bands: (0..BAND_CACHE_SIZE as u64 - 1)
             .map(|key| (key, Vec::new()))
             .collect(),
@@ -142,7 +142,7 @@ fn fixture_scan_scenarios() {
     let mut session = Session {
         engine: Engine::load().unwrap(),
         how: "fixture",
-        previous: None,
+        frames_seen: Vec::new(),
         bands: HashMap::new(),
         #[cfg(target_os = "linux")]
         capturer: capture::Backend::Portal,
@@ -193,7 +193,7 @@ fn fixture_scan_scenarios() {
                 capture()
             };
             if scenario != "unchanged" {
-                session.previous = None;
+                session.frames_seen.clear();
                 session.engine.clear_cache_for_test();
             }
             let started = Instant::now();
@@ -256,7 +256,13 @@ fn fixture_scan_scenarios() {
         serde_json::to_value(&after_noise).unwrap()
     );
     assert_eq!(
-        session.previous.as_ref().unwrap().image.get_pixel(30, 30).0,
+        session
+            .frames_seen
+            .last()
+            .unwrap()
+            .image
+            .get_pixel(30, 30)
+            .0,
         [0, 0, 0, 255]
     );
     let result = serde_json::json!({"median_ms": timings, "runs": 7,
@@ -288,4 +294,71 @@ fn windows_finds_the_caller_and_sees_it_alive() {
     assert!(alive(parent));
     assert!(alive(std::process::id()));
     assert!(!alive(u32::MAX - 3));
+}
+
+/// Scans that switch between the whole screen and a window each keep their
+/// own last frame, so neither makes the other read everything again.
+#[test]
+fn alternating_areas_keep_their_own_frames() {
+    let image = image::open("bench/fixtures/dense.png")
+        .unwrap()
+        .into_rgba8();
+    let mut session = Session {
+        engine: Engine::load().unwrap(),
+        how: "fixture",
+        frames_seen: Vec::new(),
+        bands: HashMap::new(),
+        #[cfg(target_os = "linux")]
+        capturer: capture::Backend::Portal,
+        tree: HashMap::new(),
+        covered: HashMap::new(),
+        #[cfg(target_os = "linux")]
+        desk: None,
+        #[cfg(target_os = "linux")]
+        opening: None,
+        #[cfg(target_os = "linux")]
+        frames: None,
+        #[cfg(target_os = "linux")]
+        frames_failed: false,
+        last_input: None,
+    };
+    let whole = || Capture {
+        image: image.clone(),
+        origin: (0, 0),
+    };
+    let half = Region {
+        x: image.width() as i32 / 2,
+        y: 0,
+        width: image.width() / 2,
+        height: image.height(),
+    };
+    let request = Request::default();
+
+    let started = Instant::now();
+    let first = session
+        .read_capture(&request, whole(), Duration::ZERO)
+        .unwrap();
+    let full_read = started.elapsed();
+    session
+        .read_capture(
+            &request,
+            capture::crop(whole(), half).unwrap(),
+            Duration::ZERO,
+        )
+        .unwrap();
+    assert_eq!(session.frames_seen.len(), 2);
+
+    let started = Instant::now();
+    let again = session
+        .read_capture(&request, whole(), Duration::ZERO)
+        .unwrap();
+    assert!(
+        started.elapsed() * 4 < full_read,
+        "the whole screen was read again"
+    );
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(&again).unwrap()
+    );
+    assert_eq!(session.frames_seen.len(), 2);
 }
