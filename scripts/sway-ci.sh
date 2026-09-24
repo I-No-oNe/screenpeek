@@ -13,7 +13,9 @@ log=$work/wev.log
 
 fail() {
   echo "FAIL: $*" >&2
-  tail -60 "$log" >&2 || true
+  echo "--- sway" >&2; grep -iE "error|virtual|keyboard|disconnect" "$work/sway.log" | tail -30 >&2 || true
+  echo "--- screenpeek protocol" >&2; tail -30 "$work/protocol.log" >&2 || true
+  echo "--- wev" >&2; tail -30 "$log" >&2 || true
   exit 1
 }
 wait_for() { # seconds, command...
@@ -30,7 +32,7 @@ default_border none
 for_window [app_id="wev"] fullscreen enable
 EOF
 WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
-  sway -c "$work/config" >"$work/sway.log" 2>&1 &
+  sway -d -c "$work/config" >"$work/sway.log" 2>&1 &
 wait_for 30 sh -c "ls '$work' | grep -q '^wayland-[0-9]*\$'" || { cat "$work/sway.log"; fail "sway did not start"; }
 export WAYLAND_DISPLAY=$(ls "$work" | grep '^wayland-[0-9]*$' | head -1)
 export SWAYSOCK=$(ls "$work"/sway-ipc.*.sock)
@@ -44,11 +46,11 @@ sleep 1
 
 SCREENPEEK_DESKTOP_TEST=1 cargo test --release --locked --bin screenpeek \
   pointer::tests::click_reaches_the_desktop -- --ignored --exact
-"$screenpeek" type 'about:config'
+WAYLAND_DEBUG=client "$screenpeek" type 'about:config' 2>"$work/protocol.log" || fail "type failed"
 # 700 ordinary characters, timed, for docs/performance.md.
 long=$(printf 'the quick brown fox jumps over the lazy dog %.0s' $(seq 16) | cut -c1-700)
 started=$(date +%s%N)
-"$screenpeek" type "$long"
+WAYLAND_DEBUG=client "$screenpeek" type "$long" 2>"$work/protocol.log" || fail "type failed"
 echo "typed ${#long} characters in $(( ($(date +%s%N) - started) / 1000000 )) ms"
 sleep 1
 
