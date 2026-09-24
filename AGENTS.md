@@ -21,6 +21,10 @@ cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings
 cargo test --locked
 ```
 
+CI also drives real desktops: `scripts/gnome-ci.sh` (headless GNOME) and
+`scripts/sway-ci.sh` (headless Sway at scale 1.25, for clicks and typing on
+wlroots). Anything that changes input or capture must keep both passing.
+
 ## Rules
 
 - A fix for one platform must not change another. Gate code with `cfg`, and

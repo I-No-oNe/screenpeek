@@ -78,6 +78,7 @@ screenpeek click Save --fresh    # scan again first (after the layout changed)
 screenpeek click Save --check    # warn if nothing changed after clicking
 screenpeek click File --button right
 screenpeek fill Search "cats"    # click a field, then type (does not clear it)
+screenpeek fill Amount -5        # text may start with a dash
 screenpeek type "hello"
 screenpeek key ctrl+s            # also alt+F4, enter, slash, F5...
 screenpeek wait Saved            # wait up to 10 s for "Saved" to appear
@@ -100,7 +101,8 @@ screenpeek windows               # title, position, size, which has focus
 screenpeek focus Firefox         # bring it to the front
 ```
 
-Supported on Hyprland, Sway, X11, GNOME (with the extension) and KDE.
+Supported on Hyprland (scratchpads included), Sway, X11, GNOME (with the
+extension), KDE and Windows.
 
 ## Several steps at once
 
@@ -130,6 +132,11 @@ For any MCP client, run `screenpeek mcp`:
 claude mcp add screenpeek -- screenpeek mcp
 codex mcp add screenpeek -- screenpeek mcp
 ```
+
+Over MCP, `click` checks that something changed near the target, so a miss
+shows at once. It is on by default where screen capture is fast (Hyprland,
+Sway, X11, Windows), and off on GNOME and KDE, where each check would add most
+of a second. Pass `check: false` or `check: true` to choose.
 
 To make your agent prefer it, add to `CLAUDE.md` or `AGENTS.md`:
 
@@ -172,13 +179,20 @@ with OCR. For exact names and states, start them with it on:
 | `SCREENPEEK_CAPTURE=portal` | Force screenshot-portal capture |
 | `SCREENPEEK_INPUT=portal` | Force portal keyboard and mouse |
 
-A small background helper starts on the first scan, keeps the models loaded
-and stops after 10 idle minutes. The terminal you run screenpeek from is left
+A small background helper starts on the first scan and keeps the models
+loaded. It stops after 10 idle minutes, or a minute after the program that
+started it exits. It logs to `~/.cache/screenpeek/daemon.log`
+(`%LOCALAPPDATA%\screenpeek\daemon.log` on Windows). The terminal you run screenpeek from is left
 out of scans.
 
 ## Troubleshooting
 
-- **Something does not work:** run `screenpeek doctor`.
+- **Something does not work:** run `screenpeek doctor`. It also shows where
+  the background helper's log is.
+- **A command stops with "did not answer":** a desktop service is stuck,
+  often behind an open dialog such as a keyring prompt. Answer the dialog, or
+  run `systemctl --user restart xdg-desktop-portal`. screenpeek waits a few
+  seconds at most, never forever.
 - **Nothing found:** try `--fresh`, check `screenpeek windows`, or narrow with
   `--focused`.
 - **Clicks land in the wrong place after the window moved:** use `--fresh`.

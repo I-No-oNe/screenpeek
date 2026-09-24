@@ -45,9 +45,14 @@ sleep 1
 SCREENPEEK_DESKTOP_TEST=1 cargo test --release --locked --bin screenpeek \
   pointer::tests::click_reaches_the_desktop -- --ignored --exact
 "$screenpeek" type 'about:config'
+# 700 ordinary characters, timed, for docs/performance.md.
+long=$(printf 'the quick brown fox jumps over the lazy dog %.0s' $(seq 16) | cut -c1-700)
+started=$(date +%s%N)
+"$screenpeek" type "$long"
+echo "typed ${#long} characters in $(( ($(date +%s%N) - started) / 1000000 )) ms"
 sleep 1
 
-python3 - "$log" <<'PY' || fail "input did not arrive as sent"
+python3 - "$log" "$long" <<'PY' || fail "input did not arrive as sent"
 import re, sys
 position = clicked = None
 typed, pressed, seen = "", False, set()
@@ -65,8 +70,8 @@ for line in open(sys.argv[1], errors="replace"):
     if pressed and (m := re.search(r"utf8: '(.*)'", line)):
         typed += m[1]
         pressed = False
-print(f"click landed at {clicked}, typed {typed!r}")
+print(f"click landed at {clicked}, typed {typed[:40]!r}... ({len(typed)} characters)")
 assert clicked and abs(clicked[0] - 283) <= 1 and abs(clicked[1] - 649) <= 1, "click missed 283,649"
-assert typed.endswith("about:config"), "typed text lost characters"
+assert "about:config" + sys.argv[2] in typed, "typed text lost characters"
 PY
 echo "all Sway checks passed"

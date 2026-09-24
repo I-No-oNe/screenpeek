@@ -44,7 +44,8 @@ screenpeek run "click File" "click Save As" "type report.pdf" "key enter" "wait 
 
 - Use `--fresh` after anything that moved the layout.
 - Use `wait` instead of sleeping while an app loads or a dialog opens.
-- `click --check` warns when nothing near the target changed.
+- `click --check` warns when nothing near the target changed. Over MCP this is
+  on by default where capture is fast; read the warning before moving on.
 - Ambiguous names fail and list candidates: click by the listed ID instead.
 - `run` steps: `focus WINDOW`, `click T`, `fill T with TEXT`, `type TEXT`,
   `key COMBO`, `wait T`, `scroll down 3`, `drag A to B`. It stops at the
