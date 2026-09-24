@@ -14,7 +14,6 @@ log=$work/wev.log
 fail() {
   echo "FAIL: $*" >&2
   echo "--- sway" >&2; grep -iE "error|virtual|keyboard|disconnect" "$work/sway.log" | tail -30 >&2 || true
-  echo "--- screenpeek protocol" >&2; tail -30 "$work/protocol.log" >&2 || true
   echo "--- wev" >&2; tail -30 "$log" >&2 || true
   exit 1
 }
@@ -46,12 +45,15 @@ sleep 1
 
 SCREENPEEK_DESKTOP_TEST=1 cargo test --release --locked --bin screenpeek \
   pointer::tests::click_reaches_the_desktop -- --ignored --exact
-WAYLAND_DEBUG=client "$screenpeek" type 'about:config' 2>"$work/protocol.log" || fail "type failed"
+"$screenpeek" type 'about:config' 2>"$work/type.log" || { cat "$work/type.log"; fail "type failed"; }
 # 700 ordinary characters, timed, for docs/performance.md.
 long=$(printf 'the quick brown fox jumps over the lazy dog %.0s' $(seq 16) | cut -c1-700)
-started=$(date +%s%N)
-WAYLAND_DEBUG=client "$screenpeek" type "$long" 2>"$work/protocol.log" || fail "type failed"
-echo "typed ${#long} characters in $(( ($(date +%s%N) - started) / 1000000 )) ms"
+# Three times, so one lucky run cannot pass.
+for run in 1 2 3; do
+  started=$(date +%s%N)
+  "$screenpeek" type "$long" 2>"$work/type.log" || { cat "$work/type.log"; fail "type failed"; }
+  echo "typed ${#long} characters in $(( ($(date +%s%N) - started) / 1000000 )) ms"
+done
 sleep 1
 
 python3 - "$log" "$long" <<'PY' || fail "input did not arrive as sent"
@@ -74,7 +76,7 @@ for line in open(sys.argv[1], errors="replace"):
         pressed = False
 print(f"click landed at {clicked}, typed {typed[:40]!r}... ({len(typed)} characters)")
 assert clicked and abs(clicked[0] - 283) <= 1 and abs(clicked[1] - 649) <= 1, "click missed 283,649"
-want = "about:config" + sys.argv[2]
+want = "about:config" + sys.argv[2] * 3
 if want not in typed:
     at = next((i for i, (a, b) in enumerate(zip(want, typed)) if a != b), min(len(want), len(typed)))
     print(f"typed {len(typed)} of {len(want)}; first difference at {at}:")

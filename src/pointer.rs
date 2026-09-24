@@ -29,6 +29,12 @@ const LAYOUT_SWITCH: Duration = Duration::from_millis(150);
 #[cfg(target_os = "linux")]
 const KEYMAP_DELAY: Duration = Duration::from_millis(30);
 
+/// Pause after each typed key on Wayland. A compositor reads input between
+/// frames, and a slow one (software-rendered Sway in CI) dropped keys from an
+/// unpaced burst; this keeps 700 characters under 0.2 s.
+#[cfg(target_os = "linux")]
+const KEY_PACE: Duration = Duration::from_micros(150);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Button {
     Left,
@@ -399,6 +405,9 @@ impl Pointer {
                 .context("cannot type text")?;
             if !reuse {
                 self.enigo = None;
+            }
+            if wayland {
+                sleep(KEY_PACE);
             }
         }
         Ok(())
