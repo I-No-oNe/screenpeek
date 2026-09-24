@@ -154,10 +154,12 @@ fn on_virtual_pointer(
 
 impl Pointer {
     pub fn new() -> Result<Pointer> {
+        // One connection answers both: which input route, and the desktop's shape.
+        #[cfg(target_os = "linux")]
+        let screencopy = crate::capture::wayland::Screencopy::new().ok();
         #[cfg(target_os = "linux")]
         if std::env::var("SCREENPEEK_INPUT").as_deref() == Ok("portal")
-            || (crate::capture::wayland::Screencopy::new().is_err()
-                && crate::capture::wayland::logical_desktop().is_some())
+            || (screencopy.is_none() && crate::capture::wayland::logical_desktop().is_some())
         {
             if crate::daemon::available() {
                 return Ok(Pointer {
@@ -172,7 +174,9 @@ impl Pointer {
         Ok(Pointer {
             enigo: Some(new_enigo()?),
             #[cfg(target_os = "linux")]
-            desktop: crate::capture::wayland::logical_desktop(),
+            desktop: screencopy
+                .as_ref()
+                .and_then(crate::capture::wayland::Screencopy::logical_desktop),
             #[cfg(target_os = "linux")]
             portal: None,
             daemon: false,
@@ -483,5 +487,18 @@ mod tests {
             on_virtual_pointer((0, 0), (-1280, 0, 3200, 1080), (1920, 1080)),
             (768, 0)
         );
+    }
+
+    /// Clicks the real desktop; scripts/sway-ci.sh runs it and checks where it landed.
+    #[test]
+    #[ignore = "moves the real pointer"]
+    fn click_reaches_the_desktop() {
+        if std::env::var("SCREENPEEK_DESKTOP_TEST").as_deref() != Ok("1") {
+            return;
+        }
+        Pointer::new()
+            .unwrap()
+            .click(283, 649, Button::Left, 1)
+            .unwrap();
     }
 }

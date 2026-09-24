@@ -96,3 +96,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
       - run: bash scripts/gnome-ci.sh
+
+  # Hyprland and Sway share wlroots' input protocols; Sway runs headless in CI.
+  sway:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: >
+          sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxdo-dev pkg-config
+          sway wev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - run: bash scripts/sway-ci.sh
