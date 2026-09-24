@@ -50,14 +50,18 @@ sleep 1
 python3 - "$log" <<'PY' || fail "input did not arrive as sent"
 import re, sys
 position = clicked = None
-typed, pressed = "", False
+typed, pressed, seen = "", False, set()
 for line in open(sys.argv[1], errors="replace"):
     if "wl_pointer" in line and (m := re.search(r"x, y: ([-\d.]+), ([-\d.]+)", line)):
         position = (float(m[1]), float(m[2]))
     if "wl_pointer" in line and "button:" in line and "pressed" in line and clicked is None:
         clicked = position
-    if "wl_keyboard" in line and "key:" in line:
-        pressed = "state: 1" in line
+    # wev binds the keyboard twice and prints each key for both; count it once.
+    if "wl_keyboard" in line and (m := re.search(r"key: serial: (\d+);.*state: 1", line)):
+        pressed = m[1] not in seen
+        seen.add(m[1])
+    elif "wl_keyboard" in line and "key:" in line:
+        pressed = False
     if pressed and (m := re.search(r"utf8: '(.*)'", line)):
         typed += m[1]
         pressed = False

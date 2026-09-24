@@ -391,8 +391,11 @@ impl Pointer {
             if self.enigo.is_none() || !reuse {
                 self.enigo = Some(new_enigo()?);
             }
+            // A key press, not enigo's text(): on wlroots that commits through the
+            // input method, which apps without text input never see and which drops
+            // what arrives before the compositor activates it.
             self.enigo()?
-                .text(character.encode_utf8(&mut [0; 4]))
+                .key(Key::Unicode(character), Direction::Click)
                 .context("cannot type text")?;
             if !reuse {
                 self.enigo = None;
