@@ -278,3 +278,14 @@ fn tokens_are_long_and_never_repeat() {
     assert_eq!(first.len(), 32);
     assert_ne!(first, second);
 }
+
+/// The daemon outlives its caller only as long as it can tell the caller is gone.
+#[cfg(windows)]
+#[test]
+fn windows_finds_the_caller_and_sees_it_alive() {
+    let parent = client::owning_session();
+    assert_ne!(parent, 0);
+    assert!(alive(parent));
+    assert!(alive(std::process::id()));
+    assert!(!alive(u32::MAX - 3));
+}

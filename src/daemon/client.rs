@@ -107,7 +107,37 @@ pub(super) fn owning_session() -> u32 {
     std::os::unix::process::parent_id()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(super) fn owning_session() -> u32 {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    let me = std::process::id();
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return 0;
+        };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut parent = 0;
+        let mut listed = Process32FirstW(snapshot, &mut entry).is_ok();
+        while listed {
+            if entry.th32ProcessID == me {
+                parent = entry.th32ParentProcessID;
+                break;
+            }
+            listed = Process32NextW(snapshot, &mut entry).is_ok();
+        }
+        let _ = CloseHandle(snapshot);
+        parent
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(super) fn owning_session() -> u32 {
     0
 }

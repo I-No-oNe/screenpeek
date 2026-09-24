@@ -201,7 +201,25 @@ fn alive(pid: u32) -> bool {
     unsafe { kill(pid as i32, 0) == 0 }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn alive(pid: u32) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return false;
+        };
+        let mut code = 0;
+        let running =
+            GetExitCodeProcess(process, &mut code).is_ok() && code == STILL_ACTIVE.0 as u32;
+        let _ = CloseHandle(process);
+        running
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn alive(_pid: u32) -> bool {
     true
 }
