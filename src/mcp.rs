@@ -55,7 +55,7 @@ const TOOLS: &[Tool] = &[
         params: &[
             ("target", Kind::Text, "Text or ID from the last scan"),
             ("fresh", Kind::Flag, "Scan again first; use after the layout changed"),
-            ("check", Kind::Flag, "Warn when nothing near the target changes"),
+            ("check", Kind::Flag, "Warn when nothing near the target changes; on by default where screen capture is fast"),
             ("button", Kind::Option, "left, right or middle"),
             ("double", Kind::Flag, "Double click"),
         ],
@@ -209,13 +209,45 @@ fn text(value: &Value) -> String {
     }
 }
 
+/// A click that changes nothing is flagged unless the caller says otherwise,
+/// so misses show at once; left off where the portal's screenshots are slow.
+fn with_defaults(tool: &str, given: &Value, fast_capture: bool) -> Value {
+    let mut given = given.clone();
+    if tool == "click" && fast_capture && given.get("check").is_none() {
+        given["check"] = Value::Bool(true);
+    }
+    given
+}
+
+/// Whether a check costs milliseconds (screencopy, X11, Windows) rather than
+/// most of a second (the screenshot portal on GNOME and KDE).
+fn fast_capture() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        static FAST: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FAST.get_or_init(|| {
+            matches!(
+                crate::capture::Backend::new(),
+                Ok(crate::capture::Backend::Wayland(_) | crate::capture::Backend::X11(_))
+            )
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    true
+}
+
 fn call(params: &Value) -> Value {
     let name = params["name"].as_str().unwrap_or_default();
     let outcome = TOOLS
         .iter()
         .find(|tool| tool.name == name)
         .ok_or_else(|| format!("unknown tool {name}"))
-        .and_then(|tool| arguments(tool, &params["arguments"]))
+        .and_then(|tool| {
+            arguments(
+                tool,
+                &with_defaults(name, &params["arguments"], fast_capture()),
+            )
+        })
         .and_then(|args| {
             let exe = std::env::current_exe().map_err(|error| error.to_string())?;
             Command::new(exe)
@@ -270,5 +302,31 @@ mod tests {
         assert_eq!(tools.len(), TOOLS.len());
         let fill = tools.iter().find(|tool| tool["name"] == "fill").unwrap();
         assert_eq!(fill["inputSchema"]["required"], json!(["target", "text"]));
+    }
+
+    #[test]
+    fn clicks_are_checked_by_default_only_where_capture_is_fast() {
+        let click =
+            |given: Value, fast| arguments(tool("click"), &with_defaults("click", &given, fast));
+        assert_eq!(
+            click(json!({"target": "Save"}), true).unwrap(),
+            ["click", "--check", "--", "Save"]
+        );
+        assert_eq!(
+            click(json!({"target": "Save"}), false).unwrap(),
+            ["click", "--", "Save"]
+        );
+        assert_eq!(
+            click(json!({"target": "Save", "check": false}), true).unwrap(),
+            ["click", "--", "Save"]
+        );
+        assert_eq!(
+            arguments(
+                tool("fill"),
+                &with_defaults("fill", &json!({"target": "A", "text": "b"}), true)
+            )
+            .unwrap(),
+            ["fill", "--", "A", "b"]
+        );
     }
 }
