@@ -36,9 +36,7 @@ matching breaks when the theme changes. screenpeek combines all three sources.
 **1. Install**
 
 ```sh
-git clone https://github.com/I-No-oNe/screenpeek.git
-cd screenpeek
-sh install.sh
+curl -fsSL https://raw.githubusercontent.com/I-No-oNe/screenpeek/main/install.sh | sh
 ```
 
 On Windows, in PowerShell:
@@ -47,14 +45,17 @@ On Windows, in PowerShell:
 irm https://raw.githubusercontent.com/I-No-oNe/screenpeek/main/install.ps1 | iex
 ```
 
-The installer asks which extra languages to read (Hebrew, Arabic, Chinese...).
-Press Enter for none; you can change it later.
+The installer offers the agent skill for Claude Code and Codex, and asks which
+extra languages to read (Hebrew, Arabic, Chinese...). Press Enter for none; you
+can change it later.
 
 **2. Connect your agent**
 
+The installer sets up the skill for Claude Code and Codex. To use screenpeek
+as an MCP server instead:
+
 ```sh
-sh scripts/install-skills.sh                  # Claude Code and/or Codex
-claude mcp add screenpeek -- screenpeek mcp   # or use it as an MCP server
+claude mcp add screenpeek -- screenpeek mcp
 ```
 
 **3. Ask your agent to use it**, for example: *"Open Settings with screenpeek

@@ -26,6 +26,16 @@ jobs:
       - run: node tests/helpers.mjs
       - run: python3 -m doctest bench/compare_tools.py
       - run: python3 -m doctest scripts/package-manifests.py
+      - name: install.sh and install-skills.sh through a pipe, the curl | sh way
+        env:
+          PREFIX: ${{ runner.temp }}/bin
+          SCREENPEEK_SKILLS_DIR: ${{ runner.temp }}/skills
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          sh < install.sh
+          "$PREFIX/screenpeek" --version
+          (cd "$RUNNER_TEMP" && sh -s -- claude < "$GITHUB_WORKSPACE/scripts/install-skills.sh")
+          test -f "$SCREENPEEK_SKILLS_DIR/screenpeek/SKILL.md"
 
   windows:
     runs-on: windows-latest

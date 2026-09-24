@@ -13,9 +13,10 @@
 
 ## Install
 
-**Release binary (Linux x86-64):** `sh install.sh` puts `screenpeek` in
-`~/.local/bin` (set `PREFIX` to change it) and asks which extra languages to
-read.
+**Linux (x86-64):**
+`curl -fsSL https://raw.githubusercontent.com/I-No-oNe/screenpeek/main/install.sh | sh`
+installs to `~/.local/bin` (set `PREFIX` to change it) and offers the agent
+skill and extra languages. No clone needed.
 
 **Windows (x64 and ARM64):** in PowerShell,
 `irm https://raw.githubusercontent.com/I-No-oNe/screenpeek/main/install.ps1 | iex`
@@ -114,9 +115,9 @@ first step that fails.
 ## Agents and MCP
 
 ```sh
-sh scripts/install-skills.sh             # every agent it finds
-sh scripts/install-skills.sh claude      # or codex, or all
-sh scripts/install-skills.sh --link      # stay updated with git pull
+curl -fsSL https://raw.githubusercontent.com/I-No-oNe/screenpeek/main/scripts/install-skills.sh | sh
+curl -fsSL .../scripts/install-skills.sh | sh -s -- claude   # or codex, or all
+sh scripts/install-skills.sh --link      # from a clone: stay updated with git pull
 ```
 
 Skills go to `~/.claude/skills` (Claude Code) and `~/.agents/skills` (Codex).

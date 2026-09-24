@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
-# Installs the latest screenpeek release into ~/.local/bin (override with PREFIX).
+# Installs the latest screenpeek release into ~/.local/bin (override with PREFIX):
+#   curl -fsSL https://raw.githubusercontent.com/I-No-oNe/screenpeek/main/install.sh | sh
 set -eu
 
 repo=I-No-oNe/screenpeek
@@ -20,7 +21,9 @@ if command -v gh >/dev/null 2>&1; then
   gh release download "$tag" --repo "$repo" --pattern "$archive" --dir "$tmp"
   gh release download "$tag" --repo "$repo" --pattern "$archive.sha256" --dir "$tmp" 2>/dev/null || true
 else
-  tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=1" \
+  # A token, when set, lifts the shared rate limit of unauthenticated calls.
+  auth=${GITHUB_TOKEN:+"Authorization: Bearer $GITHUB_TOKEN"}
+  tag=$(curl -fsSL ${auth:+-H "$auth"} "https://api.github.com/repos/$repo/releases?per_page=1" \
     | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
   [ -n "$tag" ] || { echo "no release found" >&2; exit 1; }
   curl -fsSL -o "$tmp/$archive" "https://github.com/$repo/releases/download/$tag/$archive"
@@ -75,15 +78,32 @@ case ${XDG_CURRENT_DESKTOP:-} in
     ;;
 esac
 
-# Offer extra languages when someone is at the terminal to answer.
-if [ -t 0 ] && [ -t 1 ]; then
+# The rest asks questions. Under `curl | sh` stdin is the script, so answers
+# come from the terminal itself; with no terminal (CI, scripts) nothing is asked.
+if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
   here=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || echo .)
-  if [ -f "$here/scripts/fetch-models.sh" ]; then
-    bash "$here/scripts/fetch-models.sh"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/$repo/main/scripts/fetch-models.sh" -o "$tmp/fetch-models.sh"
-    bash "$tmp/fetch-models.sh"
+  script() {
+    if [ -f "$here/scripts/$1" ]; then
+      cp "$here/scripts/$1" "$tmp/$1"
+    else
+      curl -fsSL "https://raw.githubusercontent.com/$repo/main/scripts/$1" -o "$tmp/$1"
+    fi
+  }
+
+  agents=""
+  command -v claude >/dev/null 2>&1 && agents="claude"
+  command -v codex >/dev/null 2>&1 && agents="$agents codex"
+  if [ -n "$agents" ]; then
+    printf 'Install the screenpeek skill for%s? [Y/n] ' "$agents"
+    read -r reply </dev/tty || reply=""
+    case $reply in
+      [nN]*) ;;
+      *) script install-skills.sh && sh "$tmp/install-skills.sh" $agents ;;
+    esac
   fi
+
+  script fetch-models.sh
+  bash "$tmp/fetch-models.sh" </dev/tty
 fi
 
 # Other languages are read with tesseract, which comes from the system.

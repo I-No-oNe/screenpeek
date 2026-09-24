@@ -58,7 +58,7 @@
     $agents = @{ claude = Join-Path $HOME '.claude\skills'; codex = Join-Path $HOME '.agents\skills' }
     $found = @($agents.Keys | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue })
     if ($found.Count -gt 0 -and (Read-Host "Install the screenpeek skill for $($found -join ' and ')? [Y/n]") -notmatch '^[nN]') {
-        $files = Invoke-RestMethod "https://api.github.com/repos/$repo/contents/skill/screenpeek?ref=$tag"
+        $files = Invoke-RestMethod "https://api.github.com/repos/$repo/contents/skill/screenpeek?ref=$tag" -Headers $auth
         foreach ($agent in $found) {
             $dir = Join-Path $agents[$agent] 'screenpeek'
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
