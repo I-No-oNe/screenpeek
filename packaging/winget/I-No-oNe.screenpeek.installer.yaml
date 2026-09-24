@@ -1,5 +1,5 @@
 PackageIdentifier: I-No-oNe.screenpeek
-PackageVersion: 0.0.2-alpha
+PackageVersion: 0.0.3-alpha
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
@@ -7,7 +7,10 @@ NestedInstallerFiles:
   PortableCommandAlias: screenpeek
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/I-No-oNe/screenpeek/releases/download/v0.0.2-alpha/screenpeek-x86_64-windows.zip
-  InstallerSha256: 0E1D4AB97782524F21275A20FA52621E3D33A34BCAC12F7AB1AE55FD342D4EE3
+  InstallerUrl: https://github.com/I-No-oNe/screenpeek/releases/download/v0.0.3-alpha/screenpeek-x86_64-windows.zip
+  InstallerSha256: 7868A5CF954062CDBA88E4C215D9E8CD3CA6865D8C91F2B203FDD7B9740C8295
+- Architecture: arm64
+  InstallerUrl: https://github.com/I-No-oNe/screenpeek/releases/download/v0.0.3-alpha/screenpeek-aarch64-windows.zip
+  InstallerSha256: 82E6DCDC47C562DE06864503332ED073D2088A88F265B4C4E3D9E5EA707D3EC5
 ManifestType: installer
 ManifestVersion: 1.6.0
