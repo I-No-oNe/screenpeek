@@ -31,7 +31,7 @@ const KEYMAP_DELAY: Duration = Duration::from_millis(30);
 
 /// Pause after each typed key on Wayland. A compositor reads input between
 /// frames, and a slow one (software-rendered Sway in CI) dropped keys from an
-/// unpaced burst; this keeps 700 characters under 0.2 s.
+/// unpaced burst; with it, 700 characters take about 0.2 s.
 const KEY_PACE: Duration = Duration::from_micros(150);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

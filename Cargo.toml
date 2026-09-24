@@ -1,6 +1,6 @@
 [package]
 name = "screenpeek"
-version = "0.0.3-alpha"
+version = "0.0.4-alpha"
 edition = "2021"
 rust-version = "1.94"
 description = "Read the screen as a numbered list of text elements, then click them by name"

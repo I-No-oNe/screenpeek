@@ -18,7 +18,7 @@ Your numbers will differ; the commands below reproduce them.
 | Scan with the background helper running | ~80 ms |
 | Scan of a screen that did not change | a few ms after capture |
 | Accessibility tree of a file manager window | ~65 ms |
-| Typing 700 ordinary characters (Wayland) | ~55 ms |
+| Typing 700 ordinary characters (Sway, every one checked) | ~0.2 s |
 | First scan (starts the helper, loads models) | ~1 s |
 | GNOME / KDE screen capture, screen stream (PipeWire) | ~10 ms |
 | GNOME / KDE screen capture, screenshot portal fallback | 0.4–0.9 s |
