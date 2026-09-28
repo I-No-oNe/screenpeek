@@ -61,3 +61,15 @@ fn no_daemon_does_not_connect_to_an_existing_endpoint() {
     }
     assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
 }
+
+#[test]
+fn update_help_is_available_without_a_desktop() {
+    let output = Command::new(env!("CARGO_BIN_EXE_screenpeek"))
+        .args(["update", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("Install the newest compatible release"));
+}

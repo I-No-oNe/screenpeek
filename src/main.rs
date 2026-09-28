@@ -27,6 +27,7 @@ mod pointer;
 #[cfg(target_os = "linux")]
 mod portal;
 mod read;
+mod update;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -190,6 +191,8 @@ fn main() -> Result<()> {
         Command::Status => out!("{}", daemon::endpoint_summary()?),
 
         Command::Doctor => doctor::doctor(),
+
+        Command::Update => update::update()?,
 
         #[cfg(target_os = "linux")]
         Command::Portal => {

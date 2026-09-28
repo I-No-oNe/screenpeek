@@ -55,6 +55,14 @@ cargo install --path frames --locked
 
 The OCR models (about 12 MB) download on first use.
 
+Update with `screenpeek update`. This installs the newest compatible GitHub
+release (including alphas), verifies its SHA-256 checksum, and replaces the
+running binary in its current location. On Linux it also updates the bundled
+frame helper. The installation directory must be writable. Models, languages
+and agent skills are unchanged. For Scoop installations, use `scoop update
+screenpeek` instead. Restart long-running MCP servers and daemons to use the
+new version.
+
 ## Look at the screen
 
 ```sh

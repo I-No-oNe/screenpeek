@@ -49,6 +49,8 @@ The installer offers the agent skill for Claude Code and Codex, and asks which
 extra languages to read (Hebrew, Arabic, Chinese...). Press Enter for none; you
 can change it later.
 
+Update an existing installation with `screenpeek update`.
+
 **2. Connect your agent**
 
 The installer sets up the skill for Claude Code and Codex. To use screenpeek

@@ -1,6 +1,6 @@
 [package]
 name = "screenpeek"
-version = "0.0.4-alpha"
+version = "0.0.5-alpha"
 edition = "2021"
 rust-version = "1.94"
 description = "Read the screen as a numbered list of text elements, then click them by name"
@@ -20,8 +20,12 @@ rayon = "1"
 rten = { version = "0.26", features = ["mmap"] }
 rten-imageproc = "0.26"
 rten-tensor = "0.26"
+self-replace = "1.5.0"
+semver = "1.0.28"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11.0"
+tempfile = "3"
 unicode-normalization = "0.1.25"
 ureq = "3"
 
@@ -30,8 +34,9 @@ xcap = { version = "0.9", features = ["image"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 enigo = { version = "0.6", features = ["wayland"] }
+flate2 = "1.1.10"
 memmap2 = "0.9"
-tempfile = "3"
+tar = "0.4.46"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
@@ -46,6 +51,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [workspace]
 members = [".", "frames"]

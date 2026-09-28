@@ -149,6 +149,9 @@ pub(crate) enum Command {
     /// Say whether a daemon is running
     Status,
 
+    /// Install the newest compatible release, including prereleases
+    Update,
+
     /// Check what this desktop supports and what is missing
     Doctor,
 
