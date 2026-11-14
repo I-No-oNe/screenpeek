@@ -132,7 +132,7 @@ def main():
             cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "screenpeek"
             local = Path(work) / "screenpeek"
             local.mkdir()
-            for model in cache.glob("*.rten"):
+            for model in cache.glob("*.onnx"):
                 (local / model.name).symlink_to(model.resolve())
             cold_env = dict(env, SCREENPEEK_NO_DAEMON="1")
             command = [binary, "scan", "--json"]

@@ -64,7 +64,7 @@ fetch() { # url path
 }
 
 mkdir -p "$models"
-for model in text-detection.rten text-recognition.rten; do
+for model in text-detection.onnx text-recognition.onnx; do
   fetch "$ocrs_url/$model" "$models/$model"
 done
 

@@ -39,8 +39,8 @@ pub fn edges(placements: &[Placement]) -> Vec<i32> {
 }
 
 const MODEL_BASE_URL: &str = "https://ocrs-models.s3-accelerate.amazonaws.com";
-const DETECTION_MODEL: &str = "text-detection.rten";
-const RECOGNITION_MODEL: &str = "text-recognition.rten";
+const DETECTION_MODEL: &str = "text-detection.onnx";
+const RECOGNITION_MODEL: &str = "text-recognition.onnx";
 
 /// The models are ~12 MB together; anything larger is an error page.
 const MAX_MODEL_BYTES: u64 = 64 * 1024 * 1024;
