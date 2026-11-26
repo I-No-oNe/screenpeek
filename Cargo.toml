@@ -39,8 +39,10 @@ memmap2 = "0.9"
 tar = "0.4.46"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 x11rb = { version = "0.13", features = ["randr"] }
+xkbcommon = "0.9"
 xkeysym = "0.2"
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 

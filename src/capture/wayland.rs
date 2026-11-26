@@ -25,6 +25,9 @@ use wayland_protocols_wlr::screencopy::v1::client::{
 
 use super::{Capture, Region};
 
+/// The desktop origin and logical size of a copied area.
+type Copied = ((i32, i32), Option<(u32, u32)>);
+
 pub struct Screencopy {
     queue: EventQueue<State>,
     state: State,
@@ -174,6 +177,29 @@ impl Screencopy {
 
     /// Capture an output or a region in output logical coordinates.
     fn capture_part(&mut self, index: usize, part: Option<Region>) -> Result<Capture> {
+        let (origin, logical_size) = self.copy_part(index, part)?;
+        let buffer = self.buffer.as_ref().expect("buffer just filled");
+        Ok(Capture {
+            image: logical_image(buffer.to_image()?, logical_size),
+            origin,
+        })
+    }
+
+    /// A hash of the region's raw pixels, skipping conversion and resizing,
+    /// for telling cheaply whether the screen changed.
+    pub fn fingerprint(&mut self, region: Region) -> Result<u64> {
+        use std::hash::{Hash, Hasher};
+        let index = self.output_containing(region)?;
+        self.copy_part(index, Some(region))?;
+        let buffer = self.buffer.as_ref().expect("buffer just filled");
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        buffer.map[..buffer.stride as usize * buffer.height as usize].hash(&mut hasher);
+        Ok(hasher.finish())
+    }
+
+    /// Copy an output or a region into the buffer; gives its desktop origin
+    /// and logical size.
+    fn copy_part(&mut self, index: usize, part: Option<Region>) -> Result<Copied> {
         let output = self
             .state
             .outputs
@@ -225,17 +251,23 @@ impl Screencopy {
         if self.state.frame.failed {
             bail!("the copy failed");
         }
-
-        let buffer = self.buffer.as_ref().expect("buffer still here");
-        Ok(Capture {
-            image: logical_image(buffer.to_image()?, logical_size),
-            origin,
-        })
+        Ok((origin, logical_size))
     }
 
     pub fn capture_containing(&mut self, region: Region) -> Result<Capture> {
-        let index = self
-            .state
+        let index = self.output_containing(region)?;
+        // Fall back to the whole output if region capture is unsupported.
+        match self.capture_part(index, Some(region)) {
+            Ok(capture) => Ok(capture),
+            Err(error) => {
+                eprintln!("screenpeek: region capture failed, taking the output: {error}");
+                self.capture_part(index, None)
+            }
+        }
+    }
+
+    fn output_containing(&self, region: Region) -> Result<usize> {
+        self.state
             .outputs
             .iter()
             .position(|output| {
@@ -251,16 +283,7 @@ impl Screencopy {
                 }
                 .contains(region.x, region.y)
             })
-            .ok_or_else(|| anyhow!("no output contains {},{}", region.x, region.y))?;
-
-        // Fall back to the whole output if region capture is unsupported.
-        match self.capture_part(index, Some(region)) {
-            Ok(capture) => Ok(capture),
-            Err(error) => {
-                eprintln!("screenpeek: region capture failed, taking the output: {error}");
-                self.capture_part(index, None)
-            }
-        }
+            .ok_or_else(|| anyhow!("no output contains {},{}", region.x, region.y))
     }
 
     fn ensure_buffer(

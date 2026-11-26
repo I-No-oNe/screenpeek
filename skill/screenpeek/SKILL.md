@@ -53,6 +53,21 @@ screenpeek run "click File" "click Save As" "type report.pdf" "key enter" "wait 
 - After acting, verify with `scan --grep` before the next decision.
 - Never guess coordinates for something absent from the scan.
 
+## Work beside the user (Linux)
+
+When the user is busy, or asks you to test something without taking over
+their screen, move to a private desktop: your own screen, cursor and focus.
+
+```sh
+screenpeek headless bring "Firefox" --url http://localhost:3000  # their app or site, opened for you
+screenpeek --headless scan --focused   # add --headless to every command there
+screenpeek headless stop               # when done
+```
+
+Over MCP, call `headless_start` or `headless_bring` once; later tools then
+work there until `headless_stop`. Start apps with `launch` so their controls
+read by name.
+
 ## Use something else when
 
 - The answer depends on appearance: screenshot or computer use.

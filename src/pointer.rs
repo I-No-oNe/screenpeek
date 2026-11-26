@@ -4,15 +4,14 @@
 use std::str::FromStr;
 use std::thread::sleep;
 use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 #[cfg(not(windows))]
 use enigo::Coordinate;
 pub use enigo::Direction;
 use enigo::{Axis, Button as EnigoButton, Enigo, Key, Keyboard, Mouse, Settings};
-
-/// Time for a clicked widget to take focus before typing into it.
-const FOCUS_DELAY: Duration = Duration::from_millis(120);
 
 /// Pause between drag movements so applications see a drag, not a jump.
 const DRAG_STEP: Duration = Duration::from_millis(15);
@@ -72,6 +71,8 @@ mod kde;
 #[cfg(target_os = "linux")]
 mod portal;
 #[cfg(target_os = "linux")]
+mod seed;
+#[cfg(target_os = "linux")]
 pub use portal::Screen;
 
 /// Input the daemon performs with its portal session, so each command need not open one.
@@ -102,6 +103,8 @@ impl Desk {
     pub fn perform(self, input: Input) -> (Result<()>, Option<Desk>) {
         let mut pointer = Pointer {
             enigo: None,
+            keymap_sent: None,
+            needs_seed: false,
             desktop: None,
             portal: Some(self.0),
             daemon: false,
@@ -113,6 +116,12 @@ impl Desk {
 
 pub struct Pointer {
     enigo: Option<Enigo>,
+    /// When the newest keyboard's keymap went out; keys wait for it to land.
+    #[cfg(target_os = "linux")]
+    keymap_sent: Option<Instant>,
+    /// The seat has no keymap, so each new keyboard is given one to start from.
+    #[cfg(target_os = "linux")]
+    needs_seed: bool,
     /// The logical desktop as x, y, width and height, when on Wayland.
     #[cfg(target_os = "linux")]
     desktop: Option<(i32, i32, u32, u32)>,
@@ -130,14 +139,10 @@ fn new_enigo() -> Result<Enigo> {
         // Avoid sending every input event through both Wayland and XWayland.
         settings.x11_display = Some("screenpeek-disabled".into());
     }
-    let enigo = Enigo::new(&settings).context(
+    Enigo::new(&settings).context(
         "cannot reach the input backend; on Wayland the compositor must support the \
          virtual pointer and virtual keyboard protocols",
-    )?;
-    // Keys sent before a new keyboard's keymap lands are dropped.
-    #[cfg(target_os = "linux")]
-    sleep(KEYMAP_DELAY);
-    Ok(enigo)
+    )
 }
 
 /// enigo scales absolute motion by the first output's mode in pixels, while
@@ -169,6 +174,8 @@ impl Pointer {
             if crate::daemon::available() {
                 return Ok(Pointer {
                     enigo: None,
+                    keymap_sent: None,
+                    needs_seed: false,
                     desktop: None,
                     portal: None,
                     daemon: true,
@@ -176,8 +183,16 @@ impl Pointer {
             }
             return Self::local_portal();
         }
+        #[cfg(target_os = "linux")]
+        let needs_seed = screencopy.is_some() && seed::needed();
+        #[cfg(target_os = "linux")]
+        let _seed = needs_seed.then(seed::plant);
         Ok(Pointer {
             enigo: Some(new_enigo()?),
+            #[cfg(target_os = "linux")]
+            keymap_sent: Some(Instant::now()),
+            #[cfg(target_os = "linux")]
+            needs_seed,
             #[cfg(target_os = "linux")]
             desktop: screencopy
                 .as_ref()
@@ -193,6 +208,8 @@ impl Pointer {
     fn local_portal() -> Result<Pointer> {
         Ok(Pointer {
             enigo: None,
+            keymap_sent: None,
+            needs_seed: false,
             desktop: None,
             portal: Some(Desk::open()?.0),
             daemon: false,
@@ -312,6 +329,27 @@ impl Pointer {
         self.enigo.as_mut().context("input backend unavailable")
     }
 
+    /// Clicks need no keymap, so only keys wait for a new keyboard's to land;
+    /// keys sent before it arrives are dropped.
+    fn keyboard(&mut self) -> Result<&mut Enigo> {
+        #[cfg(target_os = "linux")]
+        if let Some(sent) = self.keymap_sent.take() {
+            sleep(KEYMAP_DELAY.saturating_sub(sent.elapsed()));
+        }
+        self.enigo()
+    }
+
+    fn renew_keyboard(&mut self) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        let _seed = self.needs_seed.then(seed::plant);
+        self.enigo = Some(new_enigo()?);
+        #[cfg(target_os = "linux")]
+        {
+            self.keymap_sent = Some(Instant::now());
+        }
+        Ok(())
+    }
+
     pub fn press(&mut self, combination: &str) -> Result<()> {
         if self.daemon {
             return crate::daemon::act(Input::Press(combination.to_owned()));
@@ -357,10 +395,7 @@ impl Pointer {
                 }
             };
         }
-        self.enigo
-            .as_mut()
-            .context("input backend unavailable")?
-            .key(key, direction)?;
+        self.keyboard()?.key(key, direction)?;
         Ok(())
     }
 
@@ -385,21 +420,25 @@ impl Pointer {
             }
             return self.type_keys(text);
         }
+        #[cfg(target_os = "linux")]
+        if self.needs_seed {
+            return seed::type_text(text, KEY_PACE, KEYMAP_DELAY).context("cannot type text");
+        }
         // Windows takes Unicode text directly.
         if !cfg!(target_os = "linux") {
-            return self.enigo()?.text(text).context("cannot type text");
+            return self.keyboard()?.text(text).context("cannot type text");
         }
         // Reuse is measured on Wayland only; X11 keeps a keyboard per key.
         let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
         for character in text.chars() {
             let reuse = wayland && plain(character);
             if self.enigo.is_none() || !reuse {
-                self.enigo = Some(new_enigo()?);
+                self.renew_keyboard()?;
             }
             // A key press, not enigo's text(): on wlroots that commits through the
             // input method, which apps without text input never see and which drops
             // what arrives before the compositor activates it.
-            self.enigo()?
+            self.keyboard()?
                 .key(Key::Unicode(character), Direction::Click)
                 .context("cannot type text")?;
             if !reuse {
@@ -454,10 +493,6 @@ impl Pointer {
             typed?;
         }
         Ok(())
-    }
-
-    pub fn wait_for_focus(&self) {
-        sleep(FOCUS_DELAY);
     }
 }
 

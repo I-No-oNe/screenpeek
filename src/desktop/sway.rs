@@ -16,11 +16,25 @@ const I3_RUN_COMMAND: u32 = 0;
 
 /// Raise and focus a window by its Sway container id.
 pub(super) fn focus(socket: &Path, handle: &str) -> Result<()> {
-    let reply = i3_request(socket, I3_RUN_COMMAND, &format!("[con_id={handle}] focus"))?;
-    match reply.contains("\"success\":true") {
+    command(socket, &format!("[con_id={handle}] focus"))
+}
+
+pub(super) fn command(socket: &Path, command: &str) -> Result<()> {
+    let reply = i3_request(socket, I3_RUN_COMMAND, command)?;
+    match succeeded(&reply) {
         true => Ok(()),
-        false => bail!("Sway refused to focus the window: {reply}"),
+        false => bail!("Sway refused {command:?}: {reply}"),
     }
+}
+
+/// Sway 1.11 spaces its JSON, so parse it instead of matching text.
+fn succeeded(reply: &str) -> bool {
+    #[derive(Deserialize)]
+    struct Outcome {
+        success: bool,
+    }
+    serde_json::from_str::<Vec<Outcome>>(reply)
+        .is_ok_and(|outcomes| !outcomes.is_empty() && outcomes.iter().all(|o| o.success))
 }
 
 pub(super) fn windows(socket: &Path) -> Result<Vec<Placement>> {
@@ -124,6 +138,16 @@ fn sway_placement(node: &SwayNode) -> Option<Placement> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_replies_succeed_with_or_without_spaces() {
+        assert!(succeeded(r#"[{"success":true}]"#));
+        assert!(succeeded(r#"[ { "success": true } ]"#));
+        assert!(!succeeded(
+            r#"[ { "success": false, "error": "No matching node" } ]"#
+        ));
+        assert!(!succeeded("[]"));
+    }
 
     /// Trimmed from a real `swaymsg -t get_tree`: a workspace holding one
     /// tiled window and one floating one, plus a container with no surface.

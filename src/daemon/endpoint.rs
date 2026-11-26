@@ -18,7 +18,7 @@ pub(super) fn endpoint_path() -> Result<PathBuf> {
     Ok(dirs::cache_dir()
         .ok_or_else(|| anyhow!("no cache directory on this system"))?
         .join("screenpeek")
-        .join("daemon-v3"))
+        .join(format!("daemon-v3{}", crate::headless::suffix())))
 }
 
 /// Where a daemon started by a command writes what it did and why it failed.

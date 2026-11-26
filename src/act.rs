@@ -1,8 +1,11 @@
 //! Acting on the screen: steps, scrolling, windows and checked clicks.
 
+use std::thread::sleep;
+use std::time::{Duration, Instant};
+
 use anyhow::{Context, Result};
 
-use crate::capture::{self, Region};
+use crate::capture::{self, Region, Watch};
 use crate::cli::Area;
 use crate::desktop;
 use crate::index::{Element, Snapshot};
@@ -38,12 +41,12 @@ pub(crate) fn run(steps: &[String], area: &Area) -> Result<()> {
                 };
                 let known = current(&mut snapshot, &[target])?;
                 let element = known.find(target)?;
-                pointer.click(element.x, element.y, Button::Left, 1)?;
-                out!("{element}");
                 if verb == "fill" {
-                    pointer.wait_for_focus();
-                    pointer.type_text(text)?;
+                    fill(&mut pointer, element, text)?;
+                } else {
+                    pointer.click(element.x, element.y, Button::Left, 1)?;
                 }
+                out!("{element}");
             }
             "wait" => {
                 let known = wait(argument, WAIT_TIMEOUT, false, area)?;
@@ -69,8 +72,11 @@ pub(crate) fn run(steps: &[String], area: &Area) -> Result<()> {
             }
             "focus" => {
                 let windows = desktop::placements();
-                desktop::focus(pick_window(&windows, argument)?)?;
-                pointer.wait_for_focus();
+                let window = pick_window(&windows, argument)?;
+                if !window.focused {
+                    desktop::focus(window)?;
+                    await_focus(window);
+                }
             }
             "type" => pointer.type_text(argument)?,
             "key" => pointer.press(argument)?,
@@ -137,44 +143,82 @@ pub(crate) fn scroll(pointer: &mut Pointer, direction: &str, amount: u32) -> Res
     }
 }
 
+/// Longest wait for a clicked widget or window to take focus before typing.
+const FOCUS_DELAY: Duration = Duration::from_millis(120);
+
+/// Longest wait for a checked action to show on screen.
+const CHECK_DELAY: Duration = Duration::from_millis(250);
+
+/// Click a field, wait for it to take focus, and type into it.
+pub(crate) fn fill(pointer: &mut Pointer, element: &Element, text: &str) -> Result<()> {
+    settled(&near(element), FOCUS_DELAY, || {
+        pointer.click(element.x, element.y, Button::Left, 1)
+    })?;
+    pointer.type_text(text)
+}
+
+/// Around the target, or beside it when the target is near the desktop's edge.
+fn near(element: &Element) -> [Region; 2] {
+    [
+        Region {
+            x: element.x - 200,
+            y: element.y - 100,
+            width: 400,
+            height: 200,
+        },
+        Region {
+            x: element.x,
+            y: element.y,
+            width: 200,
+            height: 100,
+        },
+    ]
+}
+
+/// Wait until the desktop reports `window` focused, plus a frame for it to repaint.
+fn await_focus(window: &desktop::Placement) {
+    let started = Instant::now();
+    while started.elapsed() < FOCUS_DELAY {
+        let windows = desktop::placements();
+        if windows
+            .iter()
+            .any(|w| w.focused && w.handle == window.handle)
+        {
+            sleep(capture::STILL.min(FOCUS_DELAY.saturating_sub(started.elapsed())));
+            return;
+        }
+        sleep(capture::POLL);
+    }
+}
+
+/// Act, then wait until the first capturable area holds still, at most `max`.
+/// Gives the area's fingerprint before and after, when it could be captured.
+fn settled(
+    areas: &[Region],
+    max: Duration,
+    act: impl FnOnce() -> Result<()>,
+) -> Result<Option<(u64, u64)>> {
+    let watch = areas.iter().find_map(|area| Watch::new(*area));
+    act()?;
+    let Some((mut watch, before)) = watch else {
+        sleep(max);
+        return Ok(None);
+    };
+    Ok(watch.settle(before, max).map(|after| (before, after)))
+}
+
 /// Run an action and warn when the pixels around the target stay the same.
 pub(crate) fn checked(
     pointer: &mut Pointer,
     element: &Element,
     act: impl FnOnce(&mut Pointer) -> Result<()>,
 ) -> Result<()> {
-    let near = || {
-        let around = Region {
-            x: element.x - 200,
-            y: element.y - 100,
-            width: 400,
-            height: 200,
-        };
-        capture::screen(None, Some(around))
-            .or_else(|_| {
-                capture::screen(
-                    None,
-                    Some(Region {
-                        x: element.x,
-                        y: element.y,
-                        width: 200,
-                        height: 100,
-                    }),
-                )
-            })
-            .ok()
-    };
-    let before = near();
-    act(pointer)?;
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    match (before, near()) {
-        (Some(before), Some(after)) if before.image == after.image => {
-            eprintln!(
-                "screenpeek: nothing changed near {:?} after the action",
-                element.text
-            )
-        }
-        (None, _) | (_, None) => eprintln!("screenpeek: cannot capture to check the action"),
+    match settled(&near(element), CHECK_DELAY, || act(pointer))? {
+        Some((before, after)) if before == after => eprintln!(
+            "screenpeek: nothing changed near {:?} after the action",
+            element.text
+        ),
+        None => eprintln!("screenpeek: cannot capture to check the action"),
         _ => {}
     }
     Ok(())

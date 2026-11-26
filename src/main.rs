@@ -20,7 +20,9 @@ mod cli;
 mod daemon;
 mod desktop;
 mod doctor;
+mod headless;
 mod index;
+mod launch;
 mod look;
 mod mcp;
 mod pointer;
@@ -33,9 +35,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use index::Element;
-use pointer::{Button, Pointer};
+use pointer::Pointer;
 
-use act::{checked, describe, pick_window, run, scroll};
+use act::{checked, describe, fill, pick_window, run, scroll};
 use cli::{Cli, Command};
 use look::{resolve, resolve_language, scan, scan_for, wait};
 
@@ -44,7 +46,12 @@ fn main() -> Result<()> {
     // it, scaled displays give each a different coordinate space.
     #[cfg(windows)]
     let _ = enigo::set_dpi_awareness();
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    #[cfg(target_os = "linux")]
+    if cli.headless && !matches!(cli.command, Command::Headless { .. }) {
+        headless::enter()?;
+    }
+    match cli.command {
         Command::Scan { grep, area, json } => {
             let elements = scan(&area)?;
             let shown: Vec<&Element> = match &grep {
@@ -221,6 +228,17 @@ fn main() -> Result<()> {
             print(&elements.iter().collect::<Vec<_>>(), json)?;
         }
 
+        #[cfg(target_os = "linux")]
+        Command::Headless { action } => match action {
+            cli::Headless::Start { size, watch } => headless::start(&size, watch)?,
+            cli::Headless::Bring { title, url } => headless::bring(&title, url.as_deref())?,
+            cli::Headless::Stop => headless::stop()?,
+            cli::Headless::Status => headless::status(),
+            cli::Headless::Ready => headless::ready()?,
+        },
+
+        Command::Launch { command } => launch::launch(&command)?,
+
         Command::Fill {
             target,
             text,
@@ -230,9 +248,7 @@ fn main() -> Result<()> {
             let mut pointer = Pointer::new()?;
             let snapshot = resolve(&target, fresh, &area)?;
             let element = snapshot.find(&target)?;
-            pointer.click(element.x, element.y, Button::Left, 1)?;
-            pointer.wait_for_focus();
-            pointer.type_text(&text)?;
+            fill(&mut pointer, element, &text)?;
             out!("{element}");
         }
     }

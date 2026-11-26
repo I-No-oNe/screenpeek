@@ -286,7 +286,8 @@ pub fn number(elements: &mut [Element]) {
 
 fn cache_path() -> Result<PathBuf> {
     let base = dirs::cache_dir().ok_or_else(|| anyhow!("no cache directory on this system"))?;
-    Ok(base.join("screenpeek").join("last-scan-v2.json"))
+    let name = format!("last-scan-v2{}.json", crate::headless::suffix());
+    Ok(base.join("screenpeek").join(name))
 }
 
 #[cfg(test)]

@@ -173,10 +173,43 @@ Run `screenpeek doctor` to see what this desktop supports and what is missing.
 ## Browsers
 
 Browsers hide their accessibility info unless asked, so screenpeek reads them
-with OCR. For exact names and states, start them with it on:
+with OCR. For exact names and states, start them through screenpeek:
 
-- Firefox: `GNOME_ACCESSIBILITY=1 firefox`
-- Chromium, Chrome and Electron apps: add `--force-renderer-accessibility`
+```sh
+screenpeek launch firefox
+screenpeek launch chromium https://example.com
+```
+
+`launch` switches the tree on for Firefox, GTK and Qt apps, and adds
+`--force-renderer-accessibility` for Chrome, Chromium, Edge, Brave and
+Electron apps such as VS Code.
+
+## Private desktop (Linux)
+
+The agent can work on a desktop of its own while you keep using yours: its
+own screen, cursor and keyboard focus, so it never moves your mouse or types
+into your window. It is a headless Sway, so install `sway` first; it runs
+under Hyprland, GNOME, KDE or anything else.
+
+```sh
+screenpeek headless start            # --watch shows it as a window on your desktop
+screenpeek --headless launch firefox http://localhost:3000
+screenpeek --headless scan           # every command takes --headless
+screenpeek headless stop
+```
+
+To hand over something you already have open, name its window. The same app
+opens on the private desktop, with the page for a browser; your copy stays
+where it is:
+
+```sh
+screenpeek headless bring "My shop - Firefox" --url http://localhost:3000
+```
+
+Browsers there get a profile of their own, so your running browser keeps its
+windows. Over MCP, the `headless_start` and `headless_bring` tools move all
+later calls to the private desktop, and `headless_stop` moves them back, so
+you can just ask: *"check every page of my site on your own desktop"*.
 
 ## Settings
 
@@ -184,6 +217,7 @@ with OCR. For exact names and states, start them with it on:
 | --- | --- |
 | `SCREENPEEK_LANG` | Languages to read, like `heb` or `auto` (see [languages](languages.md)) |
 | `SCREENPEEK_NO_DAEMON=1` | Don't use the background helper |
+| `SCREENPEEK_HEADLESS=1` | Work on the private desktop, like `--headless` |
 | `SCREENPEEK_CAPTURE=portal` | Force screenshot-portal capture |
 | `SCREENPEEK_INPUT=portal` | Force portal keyboard and mouse |
 

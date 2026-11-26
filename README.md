@@ -76,6 +76,8 @@ and turn on dark mode."*
 | Scroll or drag | `screenpeek scroll down 5` · `screenpeek drag A B` |
 | Switch windows | `screenpeek windows` · `screenpeek focus Firefox` |
 | Run several steps | `screenpeek run "click File" "click Save" "wait Saved"` |
+| Read an app's controls by name | `screenpeek launch firefox` |
+| Let the agent work beside you (Linux) | `screenpeek headless bring Firefox --url http://localhost:3000` |
 
 Full guide: [docs/usage.md](docs/usage.md).
 

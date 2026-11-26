@@ -83,6 +83,12 @@ pub fn list() -> Result<Vec<Placement>> {
     anyhow::bail!("this desktop does not report its windows yet")
 }
 
+/// Run a Sway command, such as `exit`, over its socket.
+#[cfg(target_os = "linux")]
+pub fn sway_command(socket: &std::path::Path, command: &str) -> Result<()> {
+    sway::command(socket, command)
+}
+
 /// Raise and focus a window listed by `list`.
 #[cfg(target_os = "linux")]
 pub fn focus(window: &Placement) -> Result<()> {

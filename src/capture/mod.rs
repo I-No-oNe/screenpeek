@@ -11,6 +11,8 @@ pub mod x11;
 
 use std::fmt;
 use std::str::FromStr;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
@@ -107,6 +109,71 @@ impl Capture {
 
     pub fn to_desktop(&self, x: i32, y: i32) -> (i32, i32) {
         (self.origin.0 + x, self.origin.1 + y)
+    }
+}
+
+/// Unchanged this long, the screen has settled: longer than one 60 Hz frame,
+/// so a repaint already queued has had its chance to land.
+pub(crate) const STILL: Duration = Duration::from_millis(20);
+
+/// Gap between grabs while waiting; wlr-screencopy itself waits for the next frame.
+pub(crate) const POLL: Duration = Duration::from_millis(4);
+
+/// One area of the screen, fingerprinted again and again to see when it stops changing.
+pub struct Watch {
+    #[cfg(target_os = "linux")]
+    backend: Backend,
+    region: Region,
+}
+
+impl Watch {
+    /// A watch on `region` and its fingerprint now, or none when it cannot be captured.
+    pub fn new(region: Region) -> Option<(Watch, u64)> {
+        let mut watch = Watch {
+            #[cfg(target_os = "linux")]
+            backend: Backend::new().ok()?,
+            region,
+        };
+        watch.grab().map(|now| (watch, now))
+    }
+
+    /// A hash of the area's pixels.
+    fn grab(&mut self) -> Option<u64> {
+        #[cfg(target_os = "linux")]
+        if let Backend::Wayland(screencopy) = &mut self.backend {
+            return screencopy.fingerprint(self.region).ok();
+        }
+        #[cfg(target_os = "linux")]
+        let capture = self.backend.capture(None, Some(self.region));
+        #[cfg(not(target_os = "linux"))]
+        let capture = screen(None, Some(self.region));
+        let image = capture.ok()?.image;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(image.as_raw(), &mut hasher);
+        Some(std::hash::Hasher::finish(&hasher))
+    }
+
+    /// Wait until the area differs from `before` and then holds still, at most `max`.
+    /// The screenshot portal takes too long per grab to poll, so it waits `max`.
+    pub fn settle(&mut self, before: u64, max: Duration) -> Option<u64> {
+        let started = Instant::now();
+        #[cfg(target_os = "linux")]
+        if matches!(self.backend, Backend::Portal) {
+            sleep(max);
+            return self.grab();
+        }
+        let mut last = self.grab()?;
+        let mut since = Instant::now();
+        while started.elapsed() < max {
+            sleep(POLL);
+            let frame = self.grab()?;
+            if frame != last {
+                (last, since) = (frame, Instant::now());
+            } else if last != before && since.elapsed() >= STILL {
+                break;
+            }
+        }
+        Some(last)
     }
 }
 

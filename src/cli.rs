@@ -14,6 +14,12 @@ use crate::pointer::Button;
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Command,
+
+    /// Work on the private desktop from `screenpeek headless start` (also SCREENPEEK_HEADLESS=1)
+    #[cfg(target_os = "linux")]
+    #[arg(long, global = true, env = "SCREENPEEK_HEADLESS",
+        value_parser = clap::builder::FalseyValueParser::new())]
+    pub(crate) headless: bool,
 }
 
 #[derive(Subcommand)]
@@ -180,6 +186,20 @@ pub(crate) enum Command {
         json: bool,
     },
 
+    /// Run a private desktop beside yours, so an agent works there while you keep working
+    #[cfg(target_os = "linux")]
+    Headless {
+        #[command(subcommand)]
+        action: Headless,
+    },
+
+    /// Start an app with its accessibility tree on, so its controls are read by name
+    Launch {
+        /// The app and its arguments, such as `firefox` or `chromium https://example.com`
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+
     /// Click an element and type into it
     Fill {
         target: String,
@@ -193,6 +213,35 @@ pub(crate) enum Command {
         #[command(flatten)]
         area: Area,
     },
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Subcommand)]
+pub(crate) enum Headless {
+    /// Start it (needs sway); --watch shows it as a window on your desktop
+    Start {
+        #[arg(long, default_value = crate::headless::DEFAULT_SIZE, value_name = "WxH")]
+        size: String,
+
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Open the app of one of your windows there too, starting it if needed
+    Bring {
+        /// Title of the window on your desktop, or part of it
+        title: String,
+
+        /// Page to open, for a browser
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// Stop it and the apps in it
+    Stop,
+    /// Say whether it is running
+    Status,
+    /// Run by Sway inside the new desktop to say it is up
+    #[command(hide = true)]
+    Ready,
 }
 
 /// Which part of the desktop to read.

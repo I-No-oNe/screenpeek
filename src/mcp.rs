@@ -110,7 +110,46 @@ const TOOLS: &[Tool] = &[
         description: "Run steps in order, stopping at the first failure: `focus WINDOW`, `click T`, `fill T with TEXT`, `type TEXT`, `key COMBO`, `wait T`, `scroll down 3`, `drag A to B`.",
         params: &[("steps", Kind::Steps, "Steps in order")],
     },
+    Tool {
+        name: "launch",
+        description: "Start an app with its accessibility tree on, so its controls are read by name. Opens on the private desktop after headless_start.",
+        params: &[(
+            "command",
+            Kind::Steps,
+            "The app and its arguments, such as [\"firefox\", \"http://localhost:3000\"]",
+        )],
+    },
 ];
+
+/// Underscores separate subcommands: `headless_start` runs `headless start`.
+#[cfg(target_os = "linux")]
+const HEADLESS_TOOLS: &[Tool] = &[
+    Tool {
+        name: "headless_start",
+        description: "Start a private desktop and work there from now on, so the user keeps their own screen, cursor and keyboard. Needs sway.",
+        params: &[("watch", Kind::Flag, "Show it as a window on the user's desktop")],
+    },
+    Tool {
+        name: "headless_bring",
+        description: "Open the app behind one of the user's windows on the private desktop, and a page for a browser, then work there. The user's copy stays put. Starts the private desktop if needed.",
+        params: &[
+            ("title", Kind::Text, "Title of the user's window, or part of it"),
+            ("url", Kind::Option, "Page to open, such as the site being worked on"),
+        ],
+    },
+    Tool {
+        name: "headless_stop",
+        description: "Stop the private desktop and its apps, and work on the user's desktop again.",
+        params: &[],
+    },
+];
+
+#[cfg(not(target_os = "linux"))]
+const HEADLESS_TOOLS: &[Tool] = &[];
+
+fn tools() -> impl Iterator<Item = &'static Tool> {
+    TOOLS.iter().chain(HEADLESS_TOOLS)
+}
 
 pub fn serve() -> Result<()> {
     let mut out = std::io::stdout().lock();
@@ -142,7 +181,7 @@ fn answer(id: Value, request: &Value) -> Value {
             "serverInfo": {"name": "screenpeek", "version": env!("CARGO_PKG_VERSION")},
         }),
         "ping" => json!({}),
-        "tools/list" => json!({"tools": TOOLS.iter().map(schema).collect::<Vec<_>>()}),
+        "tools/list" => json!({"tools": tools().map(schema).collect::<Vec<_>>()}),
         "tools/call" => call(params),
         method => {
             return json!({"jsonrpc": "2.0", "id": id,
@@ -180,7 +219,7 @@ fn schema(tool: &Tool) -> Value {
 /// Command-line arguments for a tool call; positionals follow `--` so that
 /// text starting with a dash is never read as a flag.
 fn arguments(tool: &Tool, given: &Value) -> Result<Vec<String>, String> {
-    let mut flags = vec![tool.name.to_string()];
+    let mut flags: Vec<String> = tool.name.split('_').map(str::to_owned).collect();
     let mut positional = Vec::new();
     for (name, kind, _) in tool.params {
         let value = &given[name];
@@ -238,8 +277,7 @@ fn fast_capture() -> bool {
 
 fn call(params: &Value) -> Value {
     let name = params["name"].as_str().unwrap_or_default();
-    let outcome = TOOLS
-        .iter()
+    let outcome = tools()
         .find(|tool| tool.name == name)
         .ok_or_else(|| format!("unknown tool {name}"))
         .and_then(|tool| {
@@ -255,7 +293,8 @@ fn call(params: &Value) -> Value {
                 .output()
                 .map_err(|error| error.to_string())
         });
-    let (text, failed) = match outcome {
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let (mut text, mut failed) = match outcome {
         Ok(output) => {
             let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -263,6 +302,19 @@ fn call(params: &Value) -> Value {
         }
         Err(error) => (error, true),
     };
+    // Later calls go to the desktop these tools moved the work to.
+    #[cfg(target_os = "linux")]
+    if !failed {
+        match name {
+            "headless_start" | "headless_bring" => {
+                if let Err(error) = crate::headless::enter() {
+                    (text, failed) = (error.to_string(), true);
+                }
+            }
+            "headless_stop" => crate::headless::leave(),
+            _ => {}
+        }
+    }
     let text = match text.trim_end() {
         "" => "(no output: nothing matched)",
         text => text,
@@ -275,7 +327,7 @@ mod tests {
     use super::*;
 
     fn tool(name: &str) -> &'static Tool {
-        TOOLS.iter().find(|tool| tool.name == name).unwrap()
+        tools().find(|tool| tool.name == name).unwrap()
     }
 
     #[test]
@@ -293,13 +345,26 @@ mod tests {
         let args = arguments(tool("run"), &json!({"steps": ["click File", "key enter"]}));
         assert_eq!(args.unwrap(), ["run", "--", "click File", "key enter"]);
         assert!(arguments(tool("click"), &json!({})).is_err());
+        let args = arguments(tool("launch"), &json!({"command": ["firefox", "-P"]}));
+        assert_eq!(args.unwrap(), ["launch", "--", "firefox", "-P"]);
+        #[cfg(target_os = "linux")]
+        {
+            let args = arguments(
+                tool("headless_bring"),
+                &json!({"title": "Shop", "url": "x"}),
+            );
+            assert_eq!(
+                args.unwrap(),
+                ["headless", "bring", "--url", "x", "--", "Shop"]
+            );
+        }
     }
 
     #[test]
     fn every_tool_lists_its_required_parameters() {
         let listed = answer(json!(1), &json!({"method": "tools/list"}));
         let tools = listed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), TOOLS.len());
+        assert_eq!(tools.len(), super::tools().count());
         let fill = tools.iter().find(|tool| tool["name"] == "fill").unwrap();
         assert_eq!(fill["inputSchema"]["required"], json!(["target", "text"]));
     }
