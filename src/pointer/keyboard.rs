@@ -1,6 +1,6 @@
-//! Input for a seat without a keymap, such as a headless Sway. enigo 0.6
-//! starts each keyboard from the seat's current keymap, and its own fallback
-//! is empty, so it gets one to start from; text bypasses enigo altogether.
+//! Wayland virtual keyboards: text typed through a keymap of its own
+//! characters, and a keymap for a seat without one, such as a headless Sway,
+//! since enigo 0.6 starts from the seat's and its own fallback is empty.
 
 use std::io::Write;
 use std::os::fd::AsFd;
@@ -107,18 +107,49 @@ fn keyboard_with(
     Ok(keyboard)
 }
 
-/// Type through one keyboard whose keymap holds just the text's characters,
+/// X clients take keycodes up to 255, so a keymap holds this many characters.
+const KEYS_PER_KEYMAP: usize = 200;
+
+/// Type through keyboards whose keymaps hold just the text's characters,
 /// one key each, so no Shift and no keymap change can lose a key.
 pub(super) fn type_text(text: &str, pace: Duration, keymap_delay: Duration) -> Result<()> {
-    let mut distinct: Vec<char> = Vec::new();
-    for character in text.chars() {
-        if !distinct.contains(&character) {
-            distinct.push(character);
-        }
-    }
-    let keymap = text_keymap(&distinct)?;
     let (_connection, mut queue, mut state) = connect().context("no Wayland seat")?;
-    let keyboard = keyboard_with(&keymap, &mut queue, &mut state)?;
+    for (part, distinct) in parts(text, KEYS_PER_KEYMAP) {
+        type_part(part, &distinct, pace, keymap_delay, &mut queue, &mut state)?;
+    }
+    Ok(())
+}
+
+/// The text in pieces of at most `limit` distinct characters, with those characters.
+fn parts(text: &str, limit: usize) -> Vec<(&str, Vec<char>)> {
+    let mut parts = Vec::new();
+    let (mut start, mut distinct) = (0, Vec::new());
+    for (index, character) in text.char_indices() {
+        if distinct.contains(&character) {
+            continue;
+        }
+        if distinct.len() == limit {
+            parts.push((&text[start..index], std::mem::take(&mut distinct)));
+            start = index;
+        }
+        distinct.push(character);
+    }
+    if start < text.len() {
+        parts.push((&text[start..], distinct));
+    }
+    parts
+}
+
+fn type_part(
+    text: &str,
+    distinct: &[char],
+    pace: Duration,
+    keymap_delay: Duration,
+    queue: &mut EventQueue<State>,
+    state: &mut State,
+) -> Result<()> {
+    let keymap = text_keymap(distinct)?;
+    let keyboard = keyboard_with(&keymap, queue, state)?;
     // Keys sent before the keymap lands are dropped.
     sleep(keymap_delay);
     let started = Instant::now();
@@ -131,9 +162,10 @@ pub(super) fn type_text(text: &str, pace: Duration, keymap_delay: Duration) -> R
         let time = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
         keyboard.key(time, key, 1);
         keyboard.key(time, key, 0);
-        queue.roundtrip(&mut state)?;
+        queue.roundtrip(state)?;
         sleep(pace);
     }
+    keyboard.destroy();
     Ok(())
 }
 
@@ -232,6 +264,14 @@ impl Dispatch<WlKeyboard, ()> for State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_texts_split_where_a_keymap_fills() {
+        let split = parts("abcabd", 3);
+        assert_eq!(split[0], ("abcab", vec!['a', 'b', 'c']));
+        assert_eq!(split[1], ("d", vec!['d']));
+        assert!(parts("", 3).is_empty());
+    }
 
     #[test]
     fn text_keymap_compiles_with_one_key_per_character() {

@@ -8,8 +8,11 @@ Linux (Hyprland, Sway, GNOME, KDE, X11) and Windows.
 - `src/capture/` screen pixels: wlr-screencopy, X11, portal, PipeWire frames, xcap on Windows
 - `src/desktop/` window list and focus, one file per desktop
 - `src/read/` OCR, Tesseract, accessibility trees (AT-SPI, UI Automation)
-- `src/pointer.rs`, `src/pointer/` mouse and keyboard: enigo, RemoteDesktop portal
+- `src/pointer.rs`, `src/pointer/` mouse and keyboard: enigo, RemoteDesktop portal,
+  `keyboard.rs` Wayland typing through a keymap of the text's own characters
 - `src/daemon/` background helper that keeps models loaded
+- `src/headless.rs` the private desktop: a nested headless Sway beside the user's
+- `src/launch.rs` starts apps with their accessibility tree on and confirms their window
 - `src/act.rs`, `src/look.rs`, `src/main.rs` commands; `src/mcp.rs` MCP server
 
 ## Check before committing
@@ -25,12 +28,19 @@ CI also drives real desktops: `scripts/gnome-ci.sh` (headless GNOME) and
 `scripts/sway-ci.sh` (headless Sway at scale 1.25, for clicks and typing on
 wlroots). Anything that changes input or capture must keep both passing.
 
+To try input on a real wlroots desktop without disturbing your own, run
+`screenpeek headless start` (needs `sway`) and add `--headless` to commands.
+`bench/actions.py` gives p50/p95 per action there, for timing changes to
+clicks, typing and waits.
+
 ## Rules
 
 - A fix for one platform must not change another. Gate code with `cfg`, and
   run clippy for Linux and Windows.
 - Speed is the point. Anything that waits on another process (D-Bus, IPC,
   portals) needs a timeout. Never add a sleep without saying why it is needed.
+- Wait for the thing itself, capped, not for a fixed time: the screen holding
+  still (`capture::Watch`), the desktop reporting focus, a window appearing.
 - A change must keep accuracy, speed and performance the same or better.
   If it touches capture, reading or input, compare `bench/measure.py`
   before and after, and give the numbers in the PR.

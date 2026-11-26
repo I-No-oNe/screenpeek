@@ -31,6 +31,7 @@ const KEYMAP_DELAY: Duration = Duration::from_millis(30);
 /// Pause after each typed key on Wayland. A compositor reads input between
 /// frames, and a slow one (software-rendered Sway in CI) dropped keys from an
 /// unpaced burst; with it, 700 characters take about 0.2 s.
+#[cfg(target_os = "linux")]
 const KEY_PACE: Duration = Duration::from_micros(150);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -69,9 +70,9 @@ use keys::named;
 #[cfg(target_os = "linux")]
 mod kde;
 #[cfg(target_os = "linux")]
-mod portal;
+mod keyboard;
 #[cfg(target_os = "linux")]
-mod seed;
+mod portal;
 #[cfg(target_os = "linux")]
 pub use portal::Screen;
 
@@ -104,7 +105,6 @@ impl Desk {
         let mut pointer = Pointer {
             enigo: None,
             keymap_sent: None,
-            needs_seed: false,
             desktop: None,
             portal: Some(self.0),
             daemon: false,
@@ -119,9 +119,6 @@ pub struct Pointer {
     /// When the newest keyboard's keymap went out; keys wait for it to land.
     #[cfg(target_os = "linux")]
     keymap_sent: Option<Instant>,
-    /// The seat has no keymap, so each new keyboard is given one to start from.
-    #[cfg(target_os = "linux")]
-    needs_seed: bool,
     /// The logical desktop as x, y, width and height, when on Wayland.
     #[cfg(target_os = "linux")]
     desktop: Option<(i32, i32, u32, u32)>,
@@ -175,7 +172,6 @@ impl Pointer {
                 return Ok(Pointer {
                     enigo: None,
                     keymap_sent: None,
-                    needs_seed: false,
                     desktop: None,
                     portal: None,
                     daemon: true,
@@ -183,16 +179,12 @@ impl Pointer {
             }
             return Self::local_portal();
         }
-        #[cfg(target_os = "linux")]
-        let needs_seed = screencopy.is_some() && seed::needed();
-        #[cfg(target_os = "linux")]
-        let _seed = needs_seed.then(seed::plant);
+        // Made on first use: typing on Wayland needs none, and a keyboard
+        // made meanwhile could make the compositor reset the typing keymap.
         Ok(Pointer {
-            enigo: Some(new_enigo()?),
+            enigo: None,
             #[cfg(target_os = "linux")]
-            keymap_sent: Some(Instant::now()),
-            #[cfg(target_os = "linux")]
-            needs_seed,
+            keymap_sent: None,
             #[cfg(target_os = "linux")]
             desktop: screencopy
                 .as_ref()
@@ -209,7 +201,6 @@ impl Pointer {
         Ok(Pointer {
             enigo: None,
             keymap_sent: None,
-            needs_seed: false,
             desktop: None,
             portal: Some(Desk::open()?.0),
             daemon: false,
@@ -325,8 +316,12 @@ impl Pointer {
         moved.and(released)
     }
 
+    /// The input backend, made on first use.
     fn enigo(&mut self) -> Result<&mut Enigo> {
-        self.enigo.as_mut().context("input backend unavailable")
+        if self.enigo.is_none() {
+            self.renew_keyboard()?;
+        }
+        Ok(self.enigo.as_mut().expect("just made"))
     }
 
     /// Clicks need no keymap, so only keys wait for a new keyboard's to land;
@@ -340,8 +335,9 @@ impl Pointer {
     }
 
     fn renew_keyboard(&mut self) -> Result<()> {
+        // Asked while no keyboard of ours exists, which would answer for the seat.
         #[cfg(target_os = "linux")]
-        let _seed = self.needs_seed.then(seed::plant);
+        let _seed = (self.desktop.is_some() && keyboard::needed()).then(keyboard::plant);
         self.enigo = Some(new_enigo()?);
         #[cfg(target_os = "linux")]
         {
@@ -420,33 +416,22 @@ impl Pointer {
             }
             return self.type_keys(text);
         }
+        // As wtype does: one keymap holding the text's characters, so no key
+        // needs Shift or waits on a keymap change a compositor could drop.
         #[cfg(target_os = "linux")]
-        if self.needs_seed {
-            return seed::type_text(text, KEY_PACE, KEYMAP_DELAY).context("cannot type text");
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            return keyboard::type_text(text, KEY_PACE, KEYMAP_DELAY).context("cannot type text");
         }
         // Windows takes Unicode text directly.
         if !cfg!(target_os = "linux") {
             return self.keyboard()?.text(text).context("cannot type text");
         }
-        // Reuse is measured on Wayland only; X11 keeps a keyboard per key.
-        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+        // X11 gets a fresh keyboard per key.
         for character in text.chars() {
-            let reuse = wayland && plain(character);
-            if self.enigo.is_none() || !reuse {
-                self.renew_keyboard()?;
-            }
-            // A key press, not enigo's text(): on wlroots that commits through the
-            // input method, which apps without text input never see and which drops
-            // what arrives before the compositor activates it.
+            self.renew_keyboard()?;
             self.keyboard()?
                 .key(Key::Unicode(character), Direction::Click)
                 .context("cannot type text")?;
-            if !reuse {
-                self.enigo = None;
-            }
-            if wayland {
-                sleep(KEY_PACE);
-            }
         }
         Ok(())
     }
@@ -496,7 +481,8 @@ impl Pointer {
     }
 }
 
-/// Characters on an unshifted US key, which a reused keyboard types reliably.
+/// Characters on an unshifted US key, which the portal types without Shift.
+#[cfg(target_os = "linux")]
 fn plain(character: char) -> bool {
     character.is_ascii_lowercase()
         || character.is_ascii_digit()

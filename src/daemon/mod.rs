@@ -424,29 +424,34 @@ impl Session {
         let recognition = Instant::now();
 
         let overlap = !comparable;
+        let tree_time;
         let (located, read_ahead) = if overlap {
             let mut tree = std::mem::take(&mut self.tree);
             let (covered, engine) = (&self.covered, &self.engine);
-            let (pixels, located) = std::thread::scope(|scope| {
+            let (pixels, (located, walked)) = std::thread::scope(|scope| {
                 let walker = scope.spawn(|| {
-                    located_windows(&mut tree, covered, &placements, &changed, capture.origin)
+                    let started = Instant::now();
+                    let located =
+                        located_windows(&mut tree, covered, &placements, &changed, capture.origin);
+                    (located, started.elapsed())
                 });
                 let pixels = engine.read_within(&capture, &edges, request.lang.as_ref());
                 (pixels, walker.join().unwrap_or_default())
             });
             self.tree = tree;
+            tree_time = walked;
             (located, Some(pixels?))
         } else {
-            (
-                located_windows(
-                    &mut self.tree,
-                    &self.covered,
-                    &placements,
-                    &changed,
-                    capture.origin,
-                ),
-                None,
-            )
+            let started = Instant::now();
+            let located = located_windows(
+                &mut self.tree,
+                &self.covered,
+                &placements,
+                &changed,
+                capture.origin,
+            );
+            tree_time = started.elapsed();
+            (located, None)
         };
 
         // Patch Tesseract reads too, since its cost scales with image area.
@@ -510,9 +515,11 @@ impl Session {
         crate::caller::filter(&mut elements, &request.excluded);
 
         eprintln!(
-            "{what}: {} elements, {verified}/{windows} window(s) verified, capture {}ms, read {}ms",
+            "{what}: {} elements, {verified}/{windows} window(s) verified, capture {}ms, \
+             tree {}ms, read {}ms",
             elements.len(),
             captured.as_millis(),
+            tree_time.as_millis(),
             recognition.elapsed().as_millis()
         );
 
@@ -561,7 +568,8 @@ fn located_windows(
     };
 
     let known = &*tree;
-    let Ok(mut windows) = crate::read::atspi::windows_where(|window| {
+    let owners = crate::headless::owners(placements);
+    let Ok(mut windows) = crate::read::atspi::windows_where(owners.as_deref(), |window| {
         !known.contains_key(&(window.title.clone(), window.width, window.height)) || touched(window)
     }) else {
         return Vec::new();
@@ -666,7 +674,17 @@ impl Session {
                     }
                 }
             }
-            self.capturer.capture(monitor, region)
+            self.capturer.capture(monitor, region).or_else(|error| {
+                // The compositor may have restarted under the same display; reconnect once.
+                eprintln!("screenpeek: capture failed, reconnecting: {error:#}");
+                // Gone for good: exit, and the client's next call starts a daemon that
+                // sees the desktop it runs on; this one reads the screen itself.
+                self.capturer = capture::Backend::new().unwrap_or_else(|error| {
+                    eprintln!("screenpeek: the desktop is gone ({error:#}), shutting down");
+                    std::process::exit(0)
+                });
+                self.capturer.capture(monitor, region)
+            })
         }
         #[cfg(not(target_os = "linux"))]
         {

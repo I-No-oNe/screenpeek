@@ -44,17 +44,38 @@ pub struct Window {
 
 /// Every window the accessibility bus is willing to describe.
 pub fn windows() -> Result<Vec<Window>> {
-    windows_where(|_| true)
+    windows_where(None, |_| true)
 }
 
 /// Return window metadata for skipped trees so cached items can be reused.
-pub fn windows_where(wanted: impl Fn(&Window) -> bool + Sync) -> Result<Vec<Window>> {
+/// With `owners`, only apps those processes run are asked at all.
+pub fn windows_where(
+    owners: Option<&[u32]>,
+    wanted: impl Fn(&Window) -> bool + Sync,
+) -> Result<Vec<Window>> {
     let bus = address().context("no accessibility bus")?;
     let connection = Builder::address(bus.as_str())?
         .method_timeout(CALL_TIMEOUT)
         .build()?;
 
-    let frames: Vec<_> = children(&connection, REGISTRY, ROOT)
+    // The bus itself knows each app's process, without asking the app.
+    let apps: Vec<_> = children(&connection, REGISTRY, ROOT)
+        .into_iter()
+        .filter(|(name, _)| {
+            owners.is_none_or(|owners| {
+                call::<u32>(
+                    &connection,
+                    "org.freedesktop.DBus",
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus",
+                    "GetConnectionUnixProcessID",
+                    &(name.as_str(),),
+                )
+                .is_some_and(|pid| owners.contains(&pid))
+            })
+        })
+        .collect();
+    let frames: Vec<_> = apps
         .into_par_iter()
         .flat_map_iter(|(name, path)| children(&connection, name.as_str(), path.as_str()))
         .filter_map(|(name, path)| {

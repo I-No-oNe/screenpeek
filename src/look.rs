@@ -45,7 +45,7 @@ pub(crate) fn scan(area: &Area) -> Result<Vec<Element>> {
             None => {
                 // The tree walk overlaps capture and recognition.
                 let (tree, recognized) = std::thread::scope(|scope| {
-                    let tree = scope.spawn(tree);
+                    let tree = scope.spawn(|| tree(&windows));
                     let recognized = (|| {
                         let mut capture = capture::screen(area.monitor, region)?;
                         capture.exclude(&excluded);
@@ -140,12 +140,13 @@ type Tree = Vec<read::atspi::Window>;
 type Tree = ();
 
 #[cfg(target_os = "linux")]
-fn tree() -> Tree {
-    read::atspi::windows().unwrap_or_default()
+fn tree(placements: &[desktop::Placement]) -> Tree {
+    let owners = crate::headless::owners(placements);
+    read::atspi::windows_where(owners.as_deref(), |_| true).unwrap_or_default()
 }
 
 #[cfg(not(target_os = "linux"))]
-fn tree() -> Tree {}
+fn tree(_placements: &[desktop::Placement]) -> Tree {}
 
 /// Place tree labels using compositor geometry or matching OCR text.
 #[cfg(target_os = "linux")]

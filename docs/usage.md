@@ -206,6 +206,8 @@ where it is:
 screenpeek headless bring "My shop - Firefox" --url http://localhost:3000
 ```
 
+It is the fastest place to work: it renders at scale 1, so captures need no
+resizing, and scans skip the accessibility trees of your own windows.
 Browsers there get a profile of their own, so your running browser keeps its
 windows. Over MCP, the `headless_start` and `headless_bring` tools move all
 later calls to the private desktop, and `headless_stop` moves them back, so

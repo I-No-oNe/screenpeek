@@ -175,7 +175,8 @@ fn main() -> Result<()> {
         #[cfg(target_os = "linux")]
         Command::Tree => {
             let started = std::time::Instant::now();
-            let windows = read::atspi::windows()?;
+            let owners = headless::owners(&desktop::placements());
+            let windows = read::atspi::windows_where(owners.as_deref(), |_| true)?;
             let elapsed = started.elapsed();
             for window in &windows {
                 out!("{} ({}x{})", window.title, window.width, window.height);

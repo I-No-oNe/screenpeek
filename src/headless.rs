@@ -15,6 +15,14 @@ pub(crate) fn suffix() -> &'static str {
     }
 }
 
+/// The processes with windows on the private desktop, when this process works
+/// there. It shares the user's accessibility bus, and asking each of their
+/// apps cost up to 400 ms a scan.
+#[cfg(target_os = "linux")]
+pub(crate) fn owners(placements: &[crate::desktop::Placement]) -> Option<Vec<u32>> {
+    active().then(|| placements.iter().filter_map(|window| window.pid).collect())
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) use linux::*;
 
@@ -32,6 +40,10 @@ mod linux {
 
     /// Sway takes a fraction of a second to start or stop; give a slow machine plenty.
     const START_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// A new window takes focus as it maps; a desktop that does not do it
+    /// within this never will.
+    const FOCUS_TAKEN: Duration = Duration::from_secs(2);
 
     /// Gap between checks on the session, which has no event to wait on.
     const START_POLL: Duration = Duration::from_millis(20);
@@ -186,7 +198,8 @@ mod linux {
         fs::write(
             &config,
             format!(
-                "output * resolution {width}x{height}\n\
+                // Scale 1: captures need no resizing, the fastest to read.
+                "output * resolution {width}x{height} scale 1\n\
                  default_border none\n\
                  exec {exe} headless ready\n"
             ),
@@ -217,12 +230,20 @@ mod linux {
                 sway.env("WLR_RENDERER", "pixman");
             }
         }
+        // A new window takes focus on most desktops; the user's goes back after.
+        let focused = match watch {
+            true => crate::desktop::placements().into_iter().find(|w| w.focused),
+            false => None,
+        };
         sway.spawn()
             .context("cannot start sway; install it to use headless mode")?;
 
         let started = Instant::now();
         while started.elapsed() < START_TIMEOUT {
             if let Some(session) = Session::read() {
+                if let Some(window) = &focused {
+                    give_back_focus(window);
+                }
                 out!(
                     "private desktop on {} ({width}x{height}); use `screenpeek --headless ...` \
                      or SCREENPEEK_HEADLESS=1",
@@ -236,6 +257,22 @@ mod linux {
             "the private desktop did not start; see {}",
             dir.join("headless.log").display()
         )
+    }
+
+    /// Once the private desktop's window has taken focus, return it to `window`.
+    fn give_back_focus(window: &crate::desktop::Placement) {
+        let started = Instant::now();
+        while started.elapsed() < FOCUS_TAKEN {
+            let windows = crate::desktop::placements();
+            if windows
+                .iter()
+                .any(|w| w.focused && w.handle != window.handle)
+            {
+                let _ = crate::desktop::focus(window);
+                return;
+            }
+            std::thread::sleep(START_POLL);
+        }
     }
 
     /// Called by Sway inside the new session: record how to reach it.
