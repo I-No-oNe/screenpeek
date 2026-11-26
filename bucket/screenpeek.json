@@ -1,16 +1,16 @@
 {
-    "version": "0.0.5-alpha",
+    "version": "0.0.6-alpha",
     "description": "Read desktop apps as text and click controls by name",
     "homepage": "https://github.com/I-No-oNe/screenpeek",
     "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/I-No-oNe/screenpeek/releases/download/v0.0.5-alpha/screenpeek-x86_64-windows.zip",
-            "hash": "029ce99e91828e4f3daf560abaf638ed0610ba562a025f5e14db47648c8887a0"
+            "url": "https://github.com/I-No-oNe/screenpeek/releases/download/v0.0.6-alpha/screenpeek-x86_64-windows.zip",
+            "hash": "cdcc2b547d683b16db6d85d029e02b27935e317129714b9ccd1223266abc1d19"
         },
         "arm64": {
-            "url": "https://github.com/I-No-oNe/screenpeek/releases/download/v0.0.5-alpha/screenpeek-aarch64-windows.zip",
-            "hash": "ea3562f58e6ec930297903321d6e330f264b80235a5351cec7ede3689c62a46c"
+            "url": "https://github.com/I-No-oNe/screenpeek/releases/download/v0.0.6-alpha/screenpeek-aarch64-windows.zip",
+            "hash": "2d7e1f2709775cd958f7cea61a11340eaa562858ba1494fdaa0ed8ce504bee1f"
         }
     },
     "bin": "screenpeek.exe",
